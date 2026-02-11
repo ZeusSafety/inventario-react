@@ -1,26 +1,132 @@
 @import "tailwindcss";
 
+@theme {
+  --color-background-zeus: #f8faff;
+  --color-foreground-zeus: #212529;
+  --color-primary-zeus: #0B3B8C;
+  --color-yellow-zeus: #F4B400;
+}
+
+@import 'bootstrap/dist/css/bootstrap.min.css';
+@import 'bootstrap-icons/font/bootstrap-icons.css';
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --background: #f8faff;
+  --foreground: #212529;
+  --primary-zeus: #0B3B8C;
+  --yellow-zeus: #F4B400;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  color: #212529;
+  background-color: #f8faff;
+  font-family: var(--font-poppins, 'Poppins'), sans-serif;
+}
+
+.font-poppins {
+  font-family: var(--font-poppins, 'Poppins'), sans-serif;
+}
+
+/* Custom Scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #002D5A;
+  border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #001F3D;
+}
+
+/* Styles migrated from original HTML */
+.btn-primary-soft {
+  background-color: #e6eefb;
+  color: #0B3B8C;
+  border: none;
+}
+
+.btn-primary-soft:hover {
+  background-color: #d1e3fa;
+  color: #082d6b;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 5px;
+}
+
+.status-green {
+  background-color: #198754;
+}
+
+.status-orange {
+  background-color: #fd7e14;
+}
+
+.status-red {
+  background-color: #dc3545;
+}
+
+.mini-hint {
+  font-size: 0.75rem;
+  color: #6c757d;
+}
+
+/* Session Banner Styling (Legacy HTML look) */
+.sesion-banner-top {
+  background-color: #e6eefb;
+  border: 1px solid #cfdbf5;
+  border-radius: 10px;
+  padding: 8px 16px;
+  display: flex !important;
+  align-items: center;
+  gap: 12px;
+  color: #072a63;
+  font-family: 'Poppins', sans-serif;
+  font-size: 0.9rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  margin-right: 15px;
+}
+
+.sesion-banner-top strong {
+  color: #0B3B8C;
+  font-weight: 800;
+  text-transform: uppercase;
+  margin: 0 4px;
+}
+
+/* Ensure buttons and badges with btn-oval or rounded-full are ALWAYS slightly rounded (less oval) */
+button.btn-oval,
+.btn-oval,
+button.rounded-full,
+div.rounded-full,
+.header-actions button,
+.header-left button {
+  border-radius: 10px !important;
+  padding-left: 1.25rem !important;
+  padding-right: 1.25rem !important;
+}
+
+/* Also ensure those in the header are covered */
+.main-header button {
+  border-radius: 10px !important;
+}
+
+/* BUT keep the hamburger menu as it is (it should move but maybe not be oval if square before) 
+   Actually, usually hamburger icon buttons are square or circle.
+   I'll exclude specifically the Menu button if it needs to be square, 
+   but the user said "cuadros bordes ovalados" pointing at the main actions.
+*/
+.main-header button:has(svg.lucide-menu) {
+  border-radius: 8px !important;
 }
