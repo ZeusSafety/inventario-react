@@ -41,12 +41,32 @@ export default function UnirseSesionModal({ isOpen, onClose }: Props) {
             const response = await apiCall(`obtener_inventario_activo&numero=${formData.num}`, 'GET');
 
             if (response.success && response.inventario) {
+                const inv = response.inventario;
+
+                // Formatear la fecha de inicio
+                let inicioVal = inv.fecha_inicio || '';
+                if (inicioVal.startsWith('0000-00-00') || !inicioVal) {
+                    inicioVal = new Date().toLocaleString(); // Fallback rápido
+                } else {
+                    try {
+                        const dateObj = new Date(inv.fecha_inicio);
+                        if (!isNaN(dateObj.getTime())) {
+                            // Usar el mismo formato que el Header
+                            const pad = (n: number) => n.toString().padStart(2, '0');
+                            inicioVal = `${pad(dateObj.getDate())}/${pad(dateObj.getMonth() + 1)}/${dateObj.getFullYear()} ${pad(dateObj.getHours())}:${pad(dateObj.getMinutes())}:${pad(dateObj.getSeconds())}`;
+                        }
+                    } catch (e) {
+                        console.warn("No se pudo formatear la fecha:", inv.fecha_inicio);
+                    }
+                }
+
                 updateSesionActual({
-                    numero: response.inventario.numero_inventario,
-                    creadoPor: response.inventario.autorizado_por,
-                    inicio: response.inventario.fecha_inicio,
+                    numero: inv.numero_inventario,
+                    creadoPor: inv.autorizado_por,
+                    inicio: inicioVal,
                     activo: true,
-                    inventario_id: response.inventario.id
+                    inventario_id: inv.id,
+                    metodo: 'unido'
                 });
                 onClose();
                 showAlert('¡Conectado!', `Te has unido al inventario ${formData.num}`, 'success');

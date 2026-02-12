@@ -18,10 +18,15 @@ export async function apiCall(action: string, method: string = 'GET', data: unkn
     }
 
     const response = await fetch(url, options);
+    const result = await response.json().catch(() => ({}));
+
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      return {
+        success: false,
+        message: result.message || `Error del servidor: ${response.status}`
+      };
     }
-    const result = await response.json();
+
     return result;
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);

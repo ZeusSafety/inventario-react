@@ -75,6 +75,7 @@ export interface AppState {
         inicio: string | null;
         activo: boolean;
         inventario_id?: number | string;
+        metodo?: 'asignado' | 'unido';
     };
 }
 
@@ -143,36 +144,110 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         localStorage.setItem('zs_app', JSON.stringify(state));
     }, [state]);
 
+    // FETCH PRODUCTS ON START (Using conteo_id=1 as master list)
+    const fetchProducts = useCallback(async () => {
+        try {
+            console.log("📦 Cargando lista maestra de productos...");
+            const response = await apiCall('obtener_detalle_conteo&conteo_id=1', 'GET');
+            if (response.success && response.productos) {
+                console.log(`✅ ${response.productos.length} productos cargados.`);
+                const mappedProducts = (response.productos as any[]).map((p, i) => ({
+                    item: p.item_producto || (i + 1),
+                    producto: p.producto || '',
+                    codigo: String(p.codigo || ''),
+                    unidad_medida: p.unidad_medida || 'UNIDAD',
+                    cantidad_sistema: Number(p.cantidad || 0),
+                    detalle_id: p.id
+                }));
+                setState((prev: AppState) => ({
+                    ...prev,
+                    productos: mappedProducts
+                }));
+            } else {
+                console.warn("⚠️ No se pudo cargar la lista maestra de productos:", response.message);
+            }
+        } catch (e) {
+            console.error("❌ Error fetching products:", e);
+        }
+    }, []);
+
+    useEffect(() => {
+        fetchProducts();
+    }, [fetchProducts]);
+
+    const clearSesionLocal = useCallback(() => {
+        console.log("🧹 Limpiando sesión local (sesionActual -> null)");
+        setState((prev: AppState) => ({
+            ...prev,
+            sesionActual: {
+                numero: null,
+                creadoPor: null,
+                inicio: null,
+                activo: false,
+                inventario_id: undefined
+            }
+        }));
+    }, []);
+
     // FETCH ACTIVE INVENTORY ON START
     const syncServerSession = useCallback(async () => {
         try {
-            const response = await apiCall('obtener_historial', 'GET');
-            if (response.success && response.inventarios) {
-                // Detection for active inventory: no fecha_fin, or zero-date strings often used in SQL
-                const active = response.inventarios.find((inv: any) =>
-                    !inv.fecha_fin ||
-                    inv.fecha_fin === '' ||
-                    (typeof inv.fecha_fin === 'string' && inv.fecha_fin.startsWith('0000-00-00'))
-                );
+            console.log("📡 Sincronizando sesión con el servidor...");
+            // Usamos la misma acción que Postman para ser consistentes
+            const response = await apiCall('listar_inventarios&solo_activos=true', 'GET');
 
-                if (active) {
-                    console.log("Inventario activo detectado en servidor:", active.numero_inventario);
+            if (response.success) {
+                const inventarios = response.inventarios || [];
+                console.log(`📋 ${inventarios.length} inventarios activos reportados por el servidor.`);
+
+                if (inventarios.length > 0) {
+                    // Tomamos el último por si acaso, aunque solo debería haber uno activo
+                    const active = inventarios[inventarios.length - 1];
+                    console.log("🔓 Inventario activo confirmado:", active.numero_inventario);
+
+                    let inicioVal = active.fecha_inicio || '';
+                    if (inicioVal.startsWith('0000-00-00') || !inicioVal) {
+                        inicioVal = fmt12(new Date()); // Fallback al momento actual si no hay fecha válida
+                    } else {
+                        try {
+                            // Intentar formatear la fecha recibida si viene en formato ISO o SQL
+                            const dateObj = new Date(active.fecha_inicio);
+                            if (!isNaN(dateObj.getTime())) {
+                                inicioVal = fmt12(dateObj);
+                            }
+                        } catch (e) {
+                            console.warn("No se pudo formatear la fecha de inicio:", active.fecha_inicio);
+                        }
+                    }
+
                     setState((prev: AppState) => ({
                         ...prev,
                         sesionActual: {
                             numero: active.numero_inventario,
                             creadoPor: active.autorizado_por || 'Administración • Hervin',
-                            inicio: active.fecha_inicio,
+                            inicio: inicioVal,
                             activo: true,
-                            inventario_id: active.id
+                            inventario_id: active.id,
+                            // Preservar el método si ya lo teníamos para este inventario
+                            metodo: prev.sesionActual.numero === active.numero_inventario
+                                ? prev.sesionActual.metodo
+                                : 'unido' // Por defecto si es nuevo/distinto
                         }
                     }));
+                } else {
+                    console.log("🔒 El servidor confirma que NO hay inventarios activos.");
+                    clearSesionLocal();
+                }
+            } else {
+                console.warn("⚠️ Error al sincronizar con el servidor:", response.message);
+                if (response.message?.includes('No hay inventario activo')) {
+                    clearSesionLocal();
                 }
             }
         } catch (e) {
-            console.error("Error syncing session:", e);
+            console.error("❌ Error syncing session:", e);
         }
-    }, []);
+    }, [clearSesionLocal]);
 
     useEffect(() => {
         syncServerSession();

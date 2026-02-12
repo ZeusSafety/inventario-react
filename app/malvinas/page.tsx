@@ -86,19 +86,36 @@ export default function MalvinasPage() {
         const exists = await checkExistingCount(data.tipo, data.tienda);
         if (exists) {
             showAlert('Atención', `El conteo ${data.tipo.toUpperCase()} para ${data.tienda} ya fue registrado.`, 'warning');
-            // No cerramos el modal para permitir corregir, o cerramos?
-            // Mejor cerramos para evitar confusión, o dejamos abierto?
-            // El usuario pidió "DEBE SALIR QUE EL CONTEO ... YA FUE REGISTRADO".
-            setIsIniciarOpen(false); // Cerramos
+            setIsIniciarOpen(false);
             return;
+        }
+
+        let initialFilas = state.productos.map(p => ({
+            ...p,
+            cantidad_conteo: ''
+        }));
+
+        // Si no hay productos globales, intentamos cargar desde el inventario_id si existe
+        if (initialFilas.length === 0 && state.sesionActual.inventario_id) {
+            try {
+                const response = await apiCall(`obtener_detalle_conteo&conteo_id=${state.sesionActual.inventario_id}`, 'GET');
+                if (response.success && response.productos) {
+                    initialFilas = response.productos.map((p: any) => ({
+                        item: p.item,
+                        producto: p.producto,
+                        codigo: p.codigo,
+                        unidad_medida: p.unidad_medida,
+                        cantidad_conteo: ''
+                    }));
+                }
+            } catch (e) {
+                console.error("Error cargando productos de emergencia:", e);
+            }
         }
 
         setCurrentConteo({
             ...data,
-            filas: state.productos.map(p => ({
-                ...p,
-                cantidad_conteo: ''
-            }))
+            filas: initialFilas
         });
         setIsIniciarOpen(false);
         setIsAvisoOpen(true);
@@ -255,10 +272,14 @@ export default function MalvinasPage() {
     };
 
     const getTiendaStatus = (tienda: string) => {
-        const ses = (state.sesiones.malvinas || []).filter((s: any) => s.tienda === tienda);
-        if (ses.some((s: any) => s.fin)) return 'listo';
-        if (ses.length > 0) return 'en_proceso';
-        return 'pendiente';
+        // Filtrar solo las sesiones del inventario ACTUAL
+        const ses = (state.sesiones.malvinas || []).filter((s: any) =>
+            s.tienda === tienda && s.numero === state.sesionActual.numero
+        );
+
+        if (ses.some((s: any) => s.fin)) return 'listo';  // Verde: Completado
+        if (ses.length > 0) return 'en_proceso';          // Naranja: En proceso
+        return 'pendiente';                                // Rojo: Pendiente
     };
 
     const handleDownloadPDF = async (sesion: any) => {

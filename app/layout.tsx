@@ -23,8 +23,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="es">
-      <body className={`${inter.variable} ${poppins.variable} antialiased flex min-h-screen`}>
+    <html lang="es" suppressHydrationWarning>
+      <body className={`${inter.variable} ${poppins.variable} antialiased flex min-h-screen`} suppressHydrationWarning>
         <InventoryProvider>
           <SidebarWrapper>
             {children}

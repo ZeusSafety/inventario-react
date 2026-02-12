@@ -75,13 +75,33 @@ export default function CallaoPage() {
         cargarSesionesAPI();
     }, [cargarSesionesAPI]);
 
-    const handleIniciarConfirm = (data: any) => {
+    const handleIniciarConfirm = async (data: any) => {
+        let initialFilas = state.productos.map(p => ({
+            ...p,
+            cantidad_conteo: ''
+        }));
+
+        // Si no hay productos globales, intentamos cargar desde el inventario_id si existe
+        if (initialFilas.length === 0 && state.sesionActual.inventario_id) {
+            try {
+                const response = await apiCall(`obtener_detalle_conteo&conteo_id=${state.sesionActual.inventario_id}`, 'GET');
+                if (response.success && response.productos) {
+                    initialFilas = response.productos.map((p: any) => ({
+                        item: p.item,
+                        producto: p.producto,
+                        codigo: p.codigo,
+                        unidad_medida: p.unidad_medida,
+                        cantidad_conteo: ''
+                    }));
+                }
+            } catch (e) {
+                console.error("Error cargando productos de emergencia:", e);
+            }
+        }
+
         setCurrentConteo({
             ...data,
-            filas: state.productos.map(p => ({
-                ...p,
-                cantidad_conteo: ''
-            }))
+            filas: initialFilas
         });
         setIsIniciarOpen(false);
         setIsAvisoOpen(true);

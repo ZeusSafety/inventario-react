@@ -58,7 +58,8 @@ export default function AsignarSesionModal({ isOpen, onClose }: Props) {
                     creadoPor: `${formData.area} • ${persona}`,
                     inicio: fmt12(),
                     activo: true,
-                    inventario_id: response.inventario_id
+                    inventario_id: response.inventario_id,
+                    metodo: 'asignado'
                 });
                 onClose();
                 showAlert('¡Éxito!', 'Número de inventario asignado correctamente.', 'success');
