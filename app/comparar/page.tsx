@@ -117,12 +117,16 @@ export default function CompararPage() {
     const [showPasswordPrompt, setShowPasswordPrompt] = useState(false);
 
     useEffect(() => {
-        if (selectedAlmacen) {
+        // Solo intentar cargar si hay un almacén seleccionado Y un inventario activo
+        if (selectedAlmacen && state.sesionActual.inventario_id) {
             fetchComparison(selectedAlmacen);
         } else {
-            setComparacionData([]);
-            setResumen(null);
-            setSistemaCargado(false);
+            // Si se pierde el ID de inventario (ej. al cerrar sesión), limpiar la vista silenciosamente
+            if (!state.sesionActual.inventario_id) {
+                setComparacionData([]);
+                setResumen(null);
+                setSistemaCargado(false);
+            }
         }
     }, [selectedAlmacen, state.sesionActual.inventario_id]);
 
@@ -132,7 +136,8 @@ export default function CompararPage() {
 
         if (!state.sesionActual.inventario_id) {
             console.error('❌ No hay inventario_id activo');
-            showAlert('Error', 'No hay un inventario activo. Por favor asigna un número de inventario primero.', 'error');
+            // Ya no mostramos alerta aquí para evitar el error al cerrar sesión
+            // showAlert('Error', 'No hay un inventario activo...', 'error');
             return;
         }
 

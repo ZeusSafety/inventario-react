@@ -33,8 +33,8 @@ export default function CerrarSesionModal({ isOpen, onClose, onConfirm }: Props)
             size="sm"
             footer={
                 <>
-                    <button className="btn btn-secondary" onClick={onClose}>Cancelar</button>
-                    <button className="btn bg-red-600 hover:bg-red-700 text-white rounded-xl px-4 py-2 font-bold" onClick={handleConfirm}>
+                    <button className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-bold transition-colors" onClick={onClose}>Cancelar</button>
+                    <button className="bg-red-600 hover:bg-red-700 text-white rounded-xl px-4 py-2 font-bold shadow-lg shadow-red-100 transition-all active:scale-95" onClick={handleConfirm}>
                         Cerrar Inventario
                     </button>
                 </>
