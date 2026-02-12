@@ -149,9 +149,14 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         try {
             console.log("📦 Cargando lista maestra de productos...");
             const response = await apiCall('obtener_detalle_conteo&conteo_id=1', 'GET');
-            if (response.success && response.productos) {
-                console.log(`✅ ${response.productos.length} productos cargados.`);
-                const mappedProducts = (response.productos as any[]).map((p, i) => ({
+            console.log('📡 Respuesta de productos:', response);
+
+            // Intentar encontrar el array de productos en varias propiedades posibles
+            const productosList = response.productos || response.datos || response.data || response.detalle;
+
+            if (response.success && Array.isArray(productosList)) {
+                console.log(`✅ ${productosList.length} productos cargados.`);
+                const mappedProducts = (productosList as any[]).map((p, i) => ({
                     item: p.item_producto || (i + 1),
                     producto: p.producto || '',
                     codigo: String(p.codigo || ''),
@@ -164,10 +169,15 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                     productos: mappedProducts
                 }));
             } else {
-                console.warn("⚠️ No se pudo cargar la lista maestra de productos:", response.message);
+                console.warn("⚠️ No se pudo cargar la lista maestra de productos. Respuesta:", response);
+                // Solo mostrar alerta si estamos seguros de que debería haber funcionado
+                if (!response.success) {
+                    // Opcional: showAlert('Error de Carga', 'No se pudo cargar la lista de productos del servidor.', 'warning');
+                }
             }
         } catch (e) {
             console.error("❌ Error fetching products:", e);
+            // showAlert('Error', 'Fallo de conexión al cargar productos.', 'error');
         }
     }, []);
 
