@@ -73,7 +73,21 @@ export default function CallaoPage() {
 
     useEffect(() => {
         cargarSesionesAPI();
+        const interval = setInterval(cargarSesionesAPI, 3000); // Polling cada 3 segundos
+        return () => clearInterval(interval);
     }, [cargarSesionesAPI]);
+
+    // Verificar estado actual del inventario activo
+    const invNum = state.sesionActual.numero;
+    const cajasRealizado = state.sesiones.callao?.some((s: any) => s.numero === invNum && s.tipo === 'cajas');
+    const standRealizado = state.sesiones.callao?.some((s: any) => s.numero === invNum && s.tipo === 'stand');
+
+    // Detección de colisión en tiempo real
+    const isCollision = currentConteo && state.sesiones.callao?.some((s: any) =>
+        s.numero === currentConteo.numero &&
+        s.tipo === currentConteo.tipo &&
+        s.registrado !== currentConteo.registrado
+    );
 
     const handleIniciarConfirm = async (data: any) => {
         let initialFilas = state.productos.map(p => ({
@@ -115,6 +129,14 @@ export default function CallaoPage() {
         if (!currentConteo) return;
         const nuevasFilas = currentConteo.filas.map((f: any) =>
             f.codigo === codigo ? { ...f, cantidad_conteo: valor } : f
+        );
+        setCurrentConteo({ ...currentConteo, filas: nuevasFilas });
+    };
+
+    const handleUpdateUnidad = (codigo: string, valor: string) => {
+        if (!currentConteo) return;
+        const nuevasFilas = currentConteo.filas.map((f: any) =>
+            f.codigo === codigo ? { ...f, unidad_medida: valor } : f
         );
         setCurrentConteo({ ...currentConteo, filas: nuevasFilas });
     };
@@ -382,41 +404,59 @@ export default function CallaoPage() {
                             </div>
                         </div>
                         <div className="header-actions flex gap-3">
+                            {/* BOTÓN CAJAS */}
                             <button
                                 onClick={async () => {
                                     if (!state.sesionActual.activo) { showAlert('Error', 'Asigne un N° de Inventario primero', 'error'); return; }
-
+                                    if (cajasRealizado) {
+                                        showAlert('Completado', `El conteo por CAJAS ya fue registrado para el inventario ${invNum}.`, 'success');
+                                        return;
+                                    }
+                                    // Doble check por si el polling no ha actualizado
                                     const exists = await checkExistingCount('cajas');
                                     if (exists) {
-                                        showAlert('Atención', `El conteo por CAJAS ya fue registrado para el inventario ${state.sesionActual.numero}.`, 'warning');
+                                        showAlert('Atención', `El conteo por CAJAS ya fue registrado (detectado en servidor).`, 'warning');
+                                        cargarSesionesAPI(); // Actualizar tabla
                                         return;
                                     }
 
                                     setTipoConteo('cajas');
                                     setIsIniciarOpen(true);
                                 }}
-                                className="flex items-center space-x-1.5 px-6 py-2 bg-gradient-to-br from-[#E9F1FF] to-[#D9E6FF] hover:from-[#D9E6FF] hover:to-[#C9D6FF] text-[#0B3B8C] rounded-full btn-oval font-semibold hover:shadow-md hover:scale-105 transition-all duration-200 shadow-sm active:scale-[0.98] text-xs"
+                                className={`flex items-center space-x-1.5 px-6 py-2 rounded-full btn-oval font-semibold transition-all duration-200 shadow-sm text-xs ${cajasRealizado
+                                    ? 'bg-green-100 text-green-700 border border-green-200 cursor-not-allowed opacity-80'
+                                    : 'bg-gradient-to-br from-[#E9F1FF] to-[#D9E6FF] hover:from-[#D9E6FF] hover:to-[#C9D6FF] text-[#0B3B8C] hover:shadow-md hover:scale-105 active:scale-[0.98]'
+                                    }`}
                             >
-                                <Box className="w-4 h-4" />
-                                <span>Conteo por Cajas</span>
+                                {cajasRealizado ? <ShieldCheck className="w-4 h-4" /> : <Box className="w-4 h-4" />}
+                                <span>{cajasRealizado ? 'Cajas: Completado' : 'Conteo por Cajas'}</span>
                             </button>
+
+                            {/* BOTÓN STAND */}
                             <button
                                 onClick={async () => {
                                     if (!state.sesionActual.activo) { showAlert('Error', 'Asigne un N° de Inventario primero', 'error'); return; }
-
+                                    if (standRealizado) {
+                                        showAlert('Completado', `El conteo de STAND ya fue registrado para el inventario ${invNum}.`, 'success');
+                                        return;
+                                    }
                                     const exists = await checkExistingCount('stand');
                                     if (exists) {
-                                        showAlert('Atención', `El conteo por STAND ya fue registrado para el inventario ${state.sesionActual.numero}.`, 'warning');
+                                        showAlert('Atención', `El conteo de STAND ya fue registrado (detectado en servidor).`, 'warning');
+                                        cargarSesionesAPI();
                                         return;
                                     }
 
                                     setTipoConteo('stand');
                                     setIsIniciarOpen(true);
                                 }}
-                                className="flex items-center space-x-1.5 px-6 py-2 bg-gradient-to-br from-[#E9F1FF] to-[#D9E6FF] hover:from-[#D9E6FF] hover:to-[#C9D6FF] text-[#0B3B8C] rounded-full btn-oval font-semibold hover:shadow-md hover:scale-105 transition-all duration-200 shadow-sm active:scale-[0.98] text-xs"
+                                className={`flex items-center space-x-1.5 px-6 py-2 rounded-full btn-oval font-semibold transition-all duration-200 shadow-sm text-xs ${standRealizado
+                                    ? 'bg-green-100 text-green-700 border border-green-200 cursor-not-allowed opacity-80'
+                                    : 'bg-gradient-to-br from-[#E9F1FF] to-[#D9E6FF] hover:from-[#D9E6FF] hover:to-[#C9D6FF] text-[#0B3B8C] hover:shadow-md hover:scale-105 active:scale-[0.98]'
+                                    }`}
                             >
-                                <Columns className="w-4 h-4" />
-                                <span className="whitespace-nowrap">Conteo de Stand</span>
+                                {standRealizado ? <ShieldCheck className="w-4 h-4" /> : <Columns className="w-4 h-4" />}
+                                <span className="whitespace-nowrap">{standRealizado ? 'Stand: Completado' : 'Conteo de Stand'}</span>
                             </button>
                         </div>
                     </header>
@@ -424,6 +464,15 @@ export default function CallaoPage() {
                     {/* Panel de Conteo Activo */}
                     {currentConteo && (
                         <div className="mb-6 p-4 rounded-2xl border-2 border-[#E9F1FF] bg-[#F8FAFF] animate-in zoom-in-95 duration-300">
+                            {isCollision && (
+                                <div className="mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded-xl flex items-center gap-3">
+                                    <ShieldCheck className="w-6 h-6" />
+                                    <div>
+                                        <p className="font-bold">¡Atención! Este conteo ya ha sido registrado por otro usuario.</p>
+                                        <p className="text-sm">No es posible guardar cambios duplicados. Por favor, actualice la página.</p>
+                                    </div>
+                                </div>
+                            )}
                             <div className="flex items-center justify-between flex-wrap gap-4">
                                 <div>
                                     <div className="flex items-center gap-2 mb-1">
@@ -440,6 +489,7 @@ export default function CallaoPage() {
                                     <button
                                         onClick={() => fileInputRef.current?.click()}
                                         className="flex items-center gap-2 px-6 py-2 bg-gradient-to-br from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-600 text-white rounded-full btn-oval font-bold shadow-sm transition-all text-xs"
+                                        disabled={!!isCollision}
                                     >
                                         <PlayCircle className="w-4 h-4" />
                                         <span>Subir (Emergencia)</span>
@@ -454,6 +504,7 @@ export default function CallaoPage() {
                                     <button
                                         onClick={() => setShowTable(true)}
                                         className="flex items-center gap-2 px-6 py-2 bg-gradient-to-br from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white rounded-full btn-oval font-bold shadow-sm transition-all text-xs"
+                                        disabled={!!isCollision}
                                     >
                                         <PlayCircle className="w-4 h-4" />
                                         <span>Empezar Inventario</span>
@@ -501,9 +552,21 @@ export default function CallaoPage() {
                                                                     className="w-24 px-2 py-1 text-center bg-white border border-gray-200 rounded-lg text-xs font-bold focus:border-[#0B3B8C] outline-none transition-all"
                                                                     value={p.cantidad_conteo}
                                                                     onChange={(e) => handleUpdateCantidad(p.codigo, e.target.value)}
+                                                                    disabled={!!isCollision}
                                                                 />
                                                             </td>
-                                                            <td className="px-4 py-3 text-xs text-gray-500">{p.unidad_medida || 'UND'}</td>
+                                                            <td className="px-4 py-3">
+                                                                <select
+                                                                    className="w-28 bg-white border border-gray-200 rounded-lg text-xs font-bold focus:border-[#0B3B8C] outline-none transition-all p-1"
+                                                                    value={p.unidad_medida || 'UNIDAD'}
+                                                                    onChange={(e) => handleUpdateUnidad(p.codigo, e.target.value)}
+                                                                    disabled={!!isCollision}
+                                                                >
+                                                                    <option value="UNIDAD">UNIDAD</option>
+                                                                    <option value="DOCENAS">DOCENAS</option>
+                                                                    <option value="DECENAS">DECENAS</option>
+                                                                </select>
+                                                            </td>
                                                             <td className="px-4 py-3">
                                                                 {p.cantidad_conteo === '' ? (
                                                                     <span className="px-2 py-1 bg-red-100 text-red-700 text-[10px] font-bold rounded-lg uppercase">Pendiente</span>
@@ -520,14 +583,16 @@ export default function CallaoPage() {
                                     <div className="flex justify-end gap-3 mt-4">
                                         <button
                                             onClick={handleRegistrarInventario}
-                                            disabled={isSubmitting}
-                                            className={`px-8 py-2.5 bg-[#0B3B8C] text-white rounded-full btn-oval font-bold shadow-md hover:bg-[#002D5A] hover:scale-105 active:scale-95 transition-all flex items-center gap-2 ${isSubmitting ? 'opacity-50 cursor-not-allowed hover:scale-100' : ''}`}
+                                            disabled={isSubmitting || !!isCollision}
+                                            className={`px-8 py-2.5 bg-[#0B3B8C] text-white rounded-full btn-oval font-bold shadow-md hover:bg-[#002D5A] hover:scale-105 active:scale-95 transition-all flex items-center gap-2 ${isSubmitting || isCollision ? 'opacity-50 cursor-not-allowed hover:scale-100' : ''}`}
                                         >
                                             {isSubmitting ? (
                                                 <>
                                                     <Loader2 className="w-4 h-4 animate-spin" />
                                                     <span>Registrando...</span>
                                                 </>
+                                            ) : isCollision ? (
+                                                'Bloqueado por Colisión'
                                             ) : (
                                                 'Registrar Inventario'
                                             )}

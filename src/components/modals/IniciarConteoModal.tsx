@@ -150,10 +150,11 @@ export default function IniciarConteoModal({ isOpen, onClose, almacen, tipo, onC
                             {TIENDAS.map((t) => {
                                 const isSelected = formData.tienda === t;
 
-                                // Verificar si la tienda ya fue registrada para este inventario (independiente del tipo)
+                                // Verificar si la tienda ya fue registrada para este inventario y TIPO ESPECÍFICO
                                 const isCompleted = state.sesiones.malvinas?.some((s: any) =>
                                     s.numero === state.sesionActual.numero &&
-                                    s.tienda === t
+                                    s.tienda === t &&
+                                    s.tipo === tipo
                                 );
 
                                 // Definir estilos por tienda

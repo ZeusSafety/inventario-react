@@ -79,7 +79,17 @@ export default function MalvinasPage() {
 
     useEffect(() => {
         cargarSesionesAPI();
+        const interval = setInterval(cargarSesionesAPI, 3000); // Polling cada 3 segundos
+        return () => clearInterval(interval);
     }, [cargarSesionesAPI]);
+
+    // Detección de colisión en tiempo real
+    const isCollision = currentConteo && state.sesiones.malvinas?.some((s: any) =>
+        s.numero === currentConteo.numero &&
+        s.tipo === currentConteo.tipo &&
+        s.tienda === currentConteo.tienda &&
+        s.registrado !== currentConteo.registrado
+    );
 
     const handleIniciarConfirm = async (data: any) => {
         // Validar duplicados antes de iniciar
@@ -129,6 +139,14 @@ export default function MalvinasPage() {
         if (!currentConteo) return;
         const nuevasFilas = currentConteo.filas.map((f: any) =>
             f.codigo === codigo ? { ...f, cantidad_conteo: valor } : f
+        );
+        setCurrentConteo({ ...currentConteo, filas: nuevasFilas });
+    };
+
+    const handleUpdateUnidad = (codigo: string, valor: string) => {
+        if (!currentConteo) return;
+        const nuevasFilas = currentConteo.filas.map((f: any) =>
+            f.codigo === codigo ? { ...f, unidad_medida: valor } : f
         );
         setCurrentConteo({ ...currentConteo, filas: nuevasFilas });
     };
@@ -454,6 +472,15 @@ export default function MalvinasPage() {
                     {/* Panel de Conteo Activo */}
                     {currentConteo && (
                         <div className="mb-6 p-4 rounded-2xl border-2 border-[#E9F1FF] bg-[#F8FAFF] animate-in zoom-in-95 duration-300">
+                            {isCollision && (
+                                <div className="mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded-xl flex items-center gap-3">
+                                    <ShieldCheck className="w-6 h-6" />
+                                    <div>
+                                        <p className="font-bold">¡Atención! Este conteo ya ha sido registrado por otro usuario.</p>
+                                        <p className="text-sm">No es posible guardar cambios duplicados. Por favor, actualice la página.</p>
+                                    </div>
+                                </div>
+                            )}
                             <div className="flex items-center justify-between flex-wrap gap-4">
                                 <div>
                                     <div className="flex items-center gap-2 mb-1">
@@ -472,6 +499,7 @@ export default function MalvinasPage() {
                                     <button
                                         onClick={() => fileInputRef.current?.click()}
                                         className="flex items-center gap-2 px-6 py-2 bg-gradient-to-br from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-600 text-white rounded-full btn-oval font-bold shadow-sm transition-all text-xs"
+                                        disabled={!!isCollision}
                                     >
                                         <PlayCircle className="w-4 h-4" />
                                         <span>Subir (Emergencia)</span>
@@ -486,6 +514,7 @@ export default function MalvinasPage() {
                                     <button
                                         onClick={() => setShowTable(true)}
                                         className="flex items-center gap-2 px-6 py-2 bg-gradient-to-br from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white rounded-full btn-oval font-bold shadow-sm transition-all text-xs"
+                                        disabled={!!isCollision}
                                     >
                                         <PlayCircle className="w-4 h-4" />
                                         <span>Empezar Inventario</span>
@@ -533,9 +562,21 @@ export default function MalvinasPage() {
                                                                     className="w-24 px-2 py-1 text-center bg-white border border-gray-200 rounded-lg text-xs font-bold focus:border-[#0B3B8C] outline-none transition-all"
                                                                     value={p.cantidad_conteo}
                                                                     onChange={(e) => handleUpdateCantidad(p.codigo, e.target.value)}
+                                                                    disabled={!!isCollision}
                                                                 />
                                                             </td>
-                                                            <td className="px-4 py-3 text-xs text-gray-500">{p.unidad_medida || 'UND'}</td>
+                                                            <td className="px-4 py-3">
+                                                                <select
+                                                                    className="w-28 bg-white border border-gray-200 rounded-lg text-xs font-bold focus:border-[#0B3B8C] outline-none transition-all p-1"
+                                                                    value={p.unidad_medida || 'UNIDAD'}
+                                                                    onChange={(e) => handleUpdateUnidad(p.codigo, e.target.value)}
+                                                                    disabled={!!isCollision}
+                                                                >
+                                                                    <option value="UNIDAD">UNIDAD</option>
+                                                                    <option value="DOCENAS">DOCENAS</option>
+                                                                    <option value="DECENAS">DECENAS</option>
+                                                                </select>
+                                                            </td>
                                                             <td className="px-4 py-3">
                                                                 {p.cantidad_conteo === '' ? (
                                                                     <span className="px-2 py-1 bg-red-100 text-red-700 text-[10px] font-bold rounded-lg uppercase">Pendiente</span>
@@ -552,14 +593,16 @@ export default function MalvinasPage() {
                                     <div className="flex justify-end gap-3 mt-4">
                                         <button
                                             onClick={handleRegistrarInventario}
-                                            disabled={isSubmitting}
-                                            className={`px-8 py-2.5 bg-[#0B3B8C] text-white rounded-full btn-oval font-bold shadow-md hover:bg-[#002D5A] hover:scale-105 active:scale-95 transition-all flex items-center gap-2 ${isSubmitting ? 'opacity-50 cursor-not-allowed hover:scale-100' : ''}`}
+                                            disabled={isSubmitting || !!isCollision}
+                                            className={`px-8 py-2.5 bg-[#0B3B8C] text-white rounded-full btn-oval font-bold shadow-md hover:bg-[#002D5A] hover:scale-105 active:scale-95 transition-all flex items-center gap-2 ${isSubmitting || isCollision ? 'opacity-50 cursor-not-allowed hover:scale-100' : ''}`}
                                         >
                                             {isSubmitting ? (
                                                 <>
                                                     <Loader2 className="w-4 h-4 animate-spin" />
                                                     <span>Registrando...</span>
                                                 </>
+                                            ) : isCollision ? (
+                                                'Bloqueado por Colisión'
                                             ) : (
                                                 'Registrar Inventario'
                                             )}

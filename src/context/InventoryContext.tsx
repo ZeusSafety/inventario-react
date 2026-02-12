@@ -213,14 +213,13 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                 if (inventarios.length > 0) {
                     // Tomamos el último por si acaso, aunque solo debería haber uno activo
                     const active = inventarios[inventarios.length - 1];
-                    console.log("🔓 Inventario activo confirmado:", active.numero_inventario);
+                    console.log("🔓 Inventario activo encontrado:", active.numero_inventario);
 
                     let inicioVal = active.fecha_inicio || '';
                     if (inicioVal.startsWith('0000-00-00') || !inicioVal) {
-                        inicioVal = fmt12(new Date()); // Fallback al momento actual si no hay fecha válida
+                        inicioVal = fmt12(new Date()); // Fallback
                     } else {
                         try {
-                            // Intentar formatear la fecha recibida si viene en formato ISO o SQL
                             const dateObj = new Date(active.fecha_inicio);
                             if (!isNaN(dateObj.getTime())) {
                                 inicioVal = fmt12(dateObj);
@@ -230,20 +229,54 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                         }
                     }
 
-                    setState((prev: AppState) => ({
-                        ...prev,
-                        sesionActual: {
-                            numero: active.numero_inventario,
-                            creadoPor: active.autorizado_por || 'Administración • Hervin',
-                            inicio: inicioVal,
-                            activo: true,
-                            inventario_id: active.id,
-                            // Preservar el método si ya lo teníamos para este inventario
-                            metodo: prev.sesionActual.numero === active.numero_inventario
-                                ? prev.sesionActual.metodo
-                                : 'unido' // Por defecto si es nuevo/distinto
-                        }
-                    }));
+                    // CHECK LOCAL STORAGE TO SEE IF WE ARE ALREADY JOINED
+                    let savedSessionNumber = null;
+                    if (typeof window !== 'undefined') {
+                        try {
+                            const saved = localStorage.getItem('zs_app');
+                            if (saved) {
+                                const parsed = JSON.parse(saved);
+                                savedSessionNumber = parsed.sesionActual?.numero;
+                            }
+                        } catch (e) { console.error(e); }
+                    }
+
+                    // LOGIC:
+                    // 1. If currently joined to this exact inventory -> SYNC SILENTLY
+                    // 2. If not joined (or joined to old one) -> PROMPT USER
+                    if (savedSessionNumber === active.numero_inventario) {
+                        console.log("🔄 Sincronizando datos de sesión actual...");
+                        setState((prev: AppState) => ({
+                            ...prev,
+                            sesionActual: {
+                                numero: active.numero_inventario,
+                                creadoPor: active.autorizado_por || 'Administración • Hervin',
+                                inicio: inicioVal,
+                                activo: true,
+                                inventario_id: active.id,
+                                metodo: prev.sesionActual.metodo || 'unido'
+                            }
+                        }));
+                    } else {
+                        console.log("🆕 Nuevo inventario detectado. Solicitando confirmación...");
+                        // No auto-join. Ask user.
+                        showConfirm(
+                            'Inventario Activo Detectado',
+                            `Se ha detectado el inventario activo ${active.numero_inventario}. ¿Deseas unirte a la sesión?`,
+                            () => {
+                                updateSesionActual({
+                                    numero: active.numero_inventario,
+                                    creadoPor: active.autorizado_por || 'Administración • Hervin',
+                                    inicio: inicioVal,
+                                    activo: true,
+                                    inventario_id: active.id,
+                                    metodo: 'unido'
+                                });
+                                showAlert('Conectado', `Te has unido al inventario ${active.numero_inventario}`, 'success');
+                            }
+                        );
+                    }
+
                 } else {
                     console.log("🔒 El servidor confirma que NO hay inventarios activos.");
                     clearSesionLocal();
@@ -257,7 +290,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         } catch (e) {
             console.error("❌ Error syncing session:", e);
         }
-    }, [clearSesionLocal]);
+    }, [clearSesionLocal, showConfirm, showAlert]);
 
     useEffect(() => {
         syncServerSession();
