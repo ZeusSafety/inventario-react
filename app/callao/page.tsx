@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useInventory, fmt12 } from '@/context/InventoryContext';
 import { apiCall } from '@/lib/api';
 import { Building, Box, Columns, PlayCircle, FileText, Search, ShieldCheck, Loader2 } from 'lucide-react';
@@ -22,9 +22,20 @@ export default function CallaoPage() {
     const [tableFilter, setTableFilter] = useState('');
     const [isAvisoOpen, setIsAvisoOpen] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [activeSessionCounts, setActiveSessionCounts] = useState<any[]>([]); // Conteos de la sesión activa
 
     const checkExistingCount = async (tipo: 'cajas' | 'stand') => {
-        // 1. Verificar primero en el estado local (incluye optimistas)
+        // 1. Verificar primero en el estado local (sincronizado por polling)
+        if (state.conteosEnProceso) {
+            const inProgress = state.conteosEnProceso.some((c: any) =>
+                c.tipo_conteo === (tipo === 'cajas' ? 'por_cajas' : 'por_stand') &&
+                c.almacen_nombre === 'Callao' &&
+                c.estado === 'en_proceso'
+            );
+            if (inProgress) return 'en_proceso';
+        }
+
+        // 2. Verificar sesiones finalizadas localmente
         if (state.sesiones.callao) {
             const existsLocally = state.sesiones.callao.some((s: any) =>
                 s.numero === state.sesionActual.numero && s.tipo === tipo
@@ -32,12 +43,19 @@ export default function CallaoPage() {
             if (existsLocally) return true;
         }
 
-        // 2. Verificar en API (por si acaso el estado local no está completo)
+        // 3. Verificar en API (fuerza de seguridad)
         if (!state.sesionActual.inventario_id) return false;
         try {
-            const response = await apiCall(`obtener_detalle_conteo&conteo_id=${state.sesionActual.inventario_id}`, 'GET');
-            if (response.success && response.productos) {
-                return response.productos.some((p: any) => p.tipo_conteo === tipo);
+            const response = await apiCall(`listar_conteos_callao&inventario_id=${state.sesionActual.inventario_id}`, 'GET');
+            if (response.success) {
+                const list = tipo === 'cajas' ? response.conteos_por_cajas : response.conteos_por_stand;
+                if (!list || list.length === 0) return false;
+
+                const enProceso = list.some((c: any) => c.estado === 'en_proceso');
+                if (enProceso) return 'en_proceso';
+
+                const finalizado = list.some((c: any) => c.estado === 'finalizado');
+                if (finalizado) return true;
             }
         } catch (e) {
             console.error(e);
@@ -50,7 +68,7 @@ export default function CallaoPage() {
             const response = await apiCall('obtener_historial', 'GET');
             if (response.success && response.inventarios) {
                 const filtered = response.inventarios
-                    .filter((inv: any) => inv.almacen === 'Callao')
+                    .filter((inv: any) => (inv.almacen || '').trim().toLowerCase() === 'callao')
                     .map((inv: any) => ({
                         id: inv.id,
                         numero: inv.numero_inventario,
@@ -58,7 +76,7 @@ export default function CallaoPage() {
                         inicio: inv.fecha_inicio,
                         fin: inv.fecha_fin,
                         pdfUrl: inv.archivo_pdf,
-                        tipo: inv.tipo_conteo || 'cajas',
+                        tipo: (inv.tipo_conteo || '').toLowerCase().includes('cajas') ? 'cajas' : 'stand',
                         filas: []
                     }));
                 setState((prev: any) => ({
@@ -71,25 +89,90 @@ export default function CallaoPage() {
         }
     }, [setState]);
 
+    const sincronizarConteosLocales = useCallback(async () => {
+        if (!state.sesionActual.inventario_id) return;
+        try {
+            const response = await apiCall(`listar_conteos_callao&inventario_id=${state.sesionActual.inventario_id}`, 'GET');
+            if (response.success) {
+                const todos = [
+                    ...(response.conteos_por_cajas || []),
+                    ...(response.conteos_por_stand || [])
+                ];
+                setActiveSessionCounts(todos);
+            }
+        } catch (e) {
+            console.error("Error sincronizando conteos locales:", e);
+        }
+    }, [state.sesionActual.inventario_id]);
+
     useEffect(() => {
         cargarSesionesAPI();
-        const interval = setInterval(cargarSesionesAPI, 3000); // Polling cada 3 segundos
+        sincronizarConteosLocales();
+        const interval = setInterval(() => {
+            cargarSesionesAPI();
+            sincronizarConteosLocales();
+        }, 3000);
         return () => clearInterval(interval);
-    }, [cargarSesionesAPI]);
+    }, [cargarSesionesAPI, sincronizarConteosLocales]);
 
     // Verificar estado actual del inventario activo
     const invNum = state.sesionActual.numero;
-    const cajasRealizado = state.sesiones.callao?.some((s: any) => s.numero === invNum && s.tipo === 'cajas');
-    const standRealizado = state.sesiones.callao?.some((s: any) => s.numero === invNum && s.tipo === 'stand');
+    const invNumNorm = (invNum || '').trim().toUpperCase();
 
-    // Detección de colisión en tiempo real
-    const isCollision = currentConteo && state.sesiones.callao?.some((s: any) =>
-        s.numero === currentConteo.numero &&
-        s.tipo === currentConteo.tipo &&
-        s.registrado !== currentConteo.registrado
+    // 1. Verificación en Historial (Sesiones cerradas)
+    const enHistorialCajas = state.sesiones.callao?.some((s: any) =>
+        (s.numero || '').trim().toUpperCase() === invNumNorm && s.tipo === 'cajas'
+    );
+    const enHistorialStand = state.sesiones.callao?.some((s: any) =>
+        (s.numero || '').trim().toUpperCase() === invNumNorm && s.tipo === 'stand'
+    );
+
+    // 2. Verificación en Sesión Activa (Conteos finalizados o en proceso)
+    const cajasFinalizadoActivo = activeSessionCounts.some(c =>
+        (c.tipo_conteo || '').toLowerCase().includes('cajas') && c.estado === 'finalizado'
+    );
+    const standFinalizadoActivo = activeSessionCounts.some(c =>
+        (c.tipo_conteo || '').toLowerCase().includes('stand') && c.estado === 'finalizado'
+    );
+
+    const cajasRealizado = enHistorialCajas || cajasFinalizadoActivo;
+    const standRealizado = enHistorialStand || standFinalizadoActivo;
+
+    const cajasEnProceso = cajasFinalizadoActivo ? false : state.conteosEnProceso?.some((c: any) =>
+        (c.tipo_conteo || '').toLowerCase().includes('cajas') &&
+        (c.almacen_nombre || '').trim().toLowerCase() === 'callao' &&
+        c.estado === 'en_proceso'
+    );
+    const standEnProceso = standFinalizadoActivo ? false : state.conteosEnProceso?.some((c: any) =>
+        (c.tipo_conteo || '').toLowerCase().includes('stand') &&
+        (c.almacen_nombre || '').trim().toLowerCase() === 'callao' &&
+        c.estado === 'en_proceso'
+    );
+
+    // Detección de bloqueo en tiempo real
+    const currentIsDone = currentConteo && (currentConteo.tipo === 'cajas' ? cajasRealizado : standRealizado);
+    const isLocked = currentConteo && (
+        currentIsDone ||
+        state.sesiones.callao?.some((s: any) =>
+            s.numero === currentConteo.numero &&
+            s.tipo === currentConteo.tipo &&
+            s.registrado !== currentConteo.registrado
+        )
     );
 
     const handleIniciarConfirm = async (data: any) => {
+        // Doble verificación de seguridad
+        const res = await checkExistingCount(data.tipo);
+        if (res === true) {
+            showAlert('Atención', `El conteo ${data.tipo.toUpperCase()} ya fue registrado.`, 'warning');
+            setIsIniciarOpen(false);
+            return;
+        } else if (res === 'en_proceso') {
+            showAlert('En Proceso', `Ya hay alguien realizando el conteo ${data.tipo.toUpperCase()}.`, 'warning');
+            setIsIniciarOpen(false);
+            return;
+        }
+
         let initialFilas = state.productos.map(p => ({
             ...p,
             cantidad_conteo: ''
@@ -412,11 +495,17 @@ export default function CallaoPage() {
                                         showAlert('Completado', `El conteo por CAJAS ya fue registrado para el inventario ${invNum}.`, 'success');
                                         return;
                                     }
-                                    // Doble check por si el polling no ha actualizado
-                                    const exists = await checkExistingCount('cajas');
-                                    if (exists) {
+                                    if (cajasEnProceso) {
+                                        showAlert('En Proceso', `Ya hay alguien realizando el conteo por CAJAS.`, 'warning');
+                                        return;
+                                    }
+                                    const res = await checkExistingCount('cajas');
+                                    if (res === true) {
                                         showAlert('Atención', `El conteo por CAJAS ya fue registrado (detectado en servidor).`, 'warning');
-                                        cargarSesionesAPI(); // Actualizar tabla
+                                        cargarSesionesAPI();
+                                        return;
+                                    } else if (res === 'en_proceso') {
+                                        showAlert('En Proceso', `Ya hay alguien realizando el conteo por CAJAS (detectado en servidor).`, 'warning');
                                         return;
                                     }
 
@@ -425,11 +514,14 @@ export default function CallaoPage() {
                                 }}
                                 className={`flex items-center space-x-1.5 px-6 py-2 rounded-full btn-oval font-semibold transition-all duration-200 shadow-sm text-xs ${cajasRealizado
                                     ? 'bg-green-100 text-green-700 border border-green-200 cursor-not-allowed opacity-80'
-                                    : 'bg-gradient-to-br from-[#E9F1FF] to-[#D9E6FF] hover:from-[#D9E6FF] hover:to-[#C9D6FF] text-[#0B3B8C] hover:shadow-md hover:scale-105 active:scale-[0.98]'
+                                    : cajasEnProceso
+                                        ? 'bg-amber-100 text-amber-700 border border-amber-200 cursor-not-allowed opacity-80'
+                                        : 'bg-gradient-to-br from-[#E9F1FF] to-[#D9E6FF] hover:from-[#D9E6FF] hover:to-[#C9D6FF] text-[#0B3B8C] hover:shadow-md hover:scale-105 active:scale-[0.98]'
                                     }`}
+                                disabled={cajasRealizado || cajasEnProceso}
                             >
-                                {cajasRealizado ? <ShieldCheck className="w-4 h-4" /> : <Box className="w-4 h-4" />}
-                                <span>{cajasRealizado ? 'Cajas: Completado' : 'Conteo por Cajas'}</span>
+                                {cajasRealizado ? <ShieldCheck className="w-4 h-4" /> : cajasEnProceso ? <Loader2 className="w-4 h-4 animate-spin" /> : <Box className="w-4 h-4" />}
+                                <span>{cajasRealizado ? 'Cajas: Completado' : cajasEnProceso ? 'Cajas: En Proceso' : 'Conteo por Cajas'}</span>
                             </button>
 
                             {/* BOTÓN STAND */}
@@ -440,10 +532,17 @@ export default function CallaoPage() {
                                         showAlert('Completado', `El conteo de STAND ya fue registrado para el inventario ${invNum}.`, 'success');
                                         return;
                                     }
-                                    const exists = await checkExistingCount('stand');
-                                    if (exists) {
+                                    if (standEnProceso) {
+                                        showAlert('En Proceso', `Ya hay alguien realizando el conteo de STAND.`, 'warning');
+                                        return;
+                                    }
+                                    const res = await checkExistingCount('stand');
+                                    if (res === true) {
                                         showAlert('Atención', `El conteo de STAND ya fue registrado (detectado en servidor).`, 'warning');
                                         cargarSesionesAPI();
+                                        return;
+                                    } else if (res === 'en_proceso') {
+                                        showAlert('En Proceso', `Ya hay alguien realizando el conteo de STAND (detectado en servidor).`, 'warning');
                                         return;
                                     }
 
@@ -452,11 +551,14 @@ export default function CallaoPage() {
                                 }}
                                 className={`flex items-center space-x-1.5 px-6 py-2 rounded-full btn-oval font-semibold transition-all duration-200 shadow-sm text-xs ${standRealizado
                                     ? 'bg-green-100 text-green-700 border border-green-200 cursor-not-allowed opacity-80'
-                                    : 'bg-gradient-to-br from-[#E9F1FF] to-[#D9E6FF] hover:from-[#D9E6FF] hover:to-[#C9D6FF] text-[#0B3B8C] hover:shadow-md hover:scale-105 active:scale-[0.98]'
+                                    : standEnProceso
+                                        ? 'bg-amber-100 text-amber-700 border border-amber-200 cursor-not-allowed opacity-80'
+                                        : 'bg-gradient-to-br from-[#E9F1FF] to-[#D9E6FF] hover:from-[#D9E6FF] hover:to-[#C9D6FF] text-[#0B3B8C] hover:shadow-md hover:scale-105 active:scale-[0.98]'
                                     }`}
+                                disabled={standRealizado || standEnProceso}
                             >
-                                {standRealizado ? <ShieldCheck className="w-4 h-4" /> : <Columns className="w-4 h-4" />}
-                                <span className="whitespace-nowrap">{standRealizado ? 'Stand: Completado' : 'Conteo de Stand'}</span>
+                                {standRealizado ? <ShieldCheck className="w-4 h-4" /> : standEnProceso ? <Loader2 className="w-4 h-4 animate-spin" /> : <Columns className="w-4 h-4" />}
+                                <span className="whitespace-nowrap">{standRealizado ? 'Stand: Completado' : standEnProceso ? 'Stand: En Proceso' : 'Conteo de Stand'}</span>
                             </button>
                         </div>
                     </header>
@@ -464,12 +566,16 @@ export default function CallaoPage() {
                     {/* Panel de Conteo Activo */}
                     {currentConteo && (
                         <div className="mb-6 p-4 rounded-2xl border-2 border-[#E9F1FF] bg-[#F8FAFF] animate-in zoom-in-95 duration-300">
-                            {isCollision && (
-                                <div className="mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded-xl flex items-center gap-3">
-                                    <ShieldCheck className="w-6 h-6" />
+                            {isLocked && (
+                                <div className="mb-4 p-4 bg-amber-50 border border-amber-200 text-amber-700 rounded-xl flex items-center gap-3">
+                                    <ShieldCheck className="w-6 h-6 text-amber-500" />
                                     <div>
-                                        <p className="font-bold">¡Atención! Este conteo ya ha sido registrado por otro usuario.</p>
-                                        <p className="text-sm">No es posible guardar cambios duplicados. Por favor, actualice la página.</p>
+                                        <p className="font-bold">
+                                            {currentIsDone
+                                                ? '¡Este conteo ya fue completado!'
+                                                : '¡Atención! Este conteo está siendo registrado o ya existe.'}
+                                        </p>
+                                        <p className="text-sm">No es posible guardar nuevos cambios. La sesión se ha bloqueado.</p>
                                     </div>
                                 </div>
                             )}
@@ -489,7 +595,7 @@ export default function CallaoPage() {
                                     <button
                                         onClick={() => fileInputRef.current?.click()}
                                         className="flex items-center gap-2 px-6 py-2 bg-gradient-to-br from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-600 text-white rounded-full btn-oval font-bold shadow-sm transition-all text-xs"
-                                        disabled={!!isCollision}
+                                        disabled={!!isLocked}
                                     >
                                         <PlayCircle className="w-4 h-4" />
                                         <span>Subir (Emergencia)</span>
@@ -504,7 +610,7 @@ export default function CallaoPage() {
                                     <button
                                         onClick={() => setShowTable(true)}
                                         className="flex items-center gap-2 px-6 py-2 bg-gradient-to-br from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white rounded-full btn-oval font-bold shadow-sm transition-all text-xs"
-                                        disabled={!!isCollision}
+                                        disabled={!!isLocked}
                                     >
                                         <PlayCircle className="w-4 h-4" />
                                         <span>Empezar Inventario</span>
@@ -552,7 +658,7 @@ export default function CallaoPage() {
                                                                     className="w-24 px-2 py-1 text-center bg-white border border-gray-200 rounded-lg text-xs font-bold focus:border-[#0B3B8C] outline-none transition-all"
                                                                     value={p.cantidad_conteo}
                                                                     onChange={(e) => handleUpdateCantidad(p.codigo, e.target.value)}
-                                                                    disabled={!!isCollision}
+                                                                    disabled={!!isLocked}
                                                                 />
                                                             </td>
                                                             <td className="px-4 py-3">
@@ -560,7 +666,7 @@ export default function CallaoPage() {
                                                                     className="w-28 bg-white border border-gray-200 rounded-lg text-xs font-bold focus:border-[#0B3B8C] outline-none transition-all p-1"
                                                                     value={p.unidad_medida || 'UNIDAD'}
                                                                     onChange={(e) => handleUpdateUnidad(p.codigo, e.target.value)}
-                                                                    disabled={!!isCollision}
+                                                                    disabled={!!isLocked}
                                                                 >
                                                                     <option value="UNIDAD">UNIDAD</option>
                                                                     <option value="DOCENAS">DOCENAS</option>
@@ -583,16 +689,16 @@ export default function CallaoPage() {
                                     <div className="flex justify-end gap-3 mt-4">
                                         <button
                                             onClick={handleRegistrarInventario}
-                                            disabled={isSubmitting || !!isCollision}
-                                            className={`px-8 py-2.5 bg-[#0B3B8C] text-white rounded-full btn-oval font-bold shadow-md hover:bg-[#002D5A] hover:scale-105 active:scale-95 transition-all flex items-center gap-2 ${isSubmitting || isCollision ? 'opacity-50 cursor-not-allowed hover:scale-100' : ''}`}
+                                            disabled={isSubmitting || !!isLocked}
+                                            className={`px-8 py-2.5 bg-[#0B3B8C] text-white rounded-full btn-oval font-bold shadow-md hover:bg-[#002D5A] hover:scale-105 active:scale-95 transition-all flex items-center gap-2 ${isSubmitting || isLocked ? 'opacity-50 cursor-not-allowed hover:scale-100' : ''}`}
                                         >
                                             {isSubmitting ? (
                                                 <>
                                                     <Loader2 className="w-4 h-4 animate-spin" />
                                                     <span>Registrando...</span>
                                                 </>
-                                            ) : isCollision ? (
-                                                'Bloqueado por Colisión'
+                                            ) : isLocked ? (
+                                                'Bloqueado'
                                             ) : (
                                                 'Registrar Inventario'
                                             )}

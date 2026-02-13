@@ -12,7 +12,7 @@ interface Props {
 }
 
 export default function UnirseSesionModal({ isOpen, onClose }: Props) {
-    const { state, updateSesionActual, showAlert } = useInventory();
+    const { state, setState, updateSesionActual, showAlert } = useInventory();
     const [formData, setFormData] = useState({
         num: state.sesionActual.numero || '',
         area: 'Administración',
@@ -60,14 +60,18 @@ export default function UnirseSesionModal({ isOpen, onClose }: Props) {
                     }
                 }
 
-                updateSesionActual({
-                    numero: inv.numero_inventario,
-                    creadoPor: inv.autorizado_por,
-                    inicio: inicioVal,
-                    activo: true,
-                    inventario_id: inv.id,
-                    metodo: 'unido'
-                });
+                setState(prev => ({
+                    ...prev,
+                    conteosEnProceso: response.conteos_en_proceso || [],
+                    sesionActual: {
+                        numero: inv.numero_inventario,
+                        creadoPor: inv.autorizado_por,
+                        inicio: inicioVal,
+                        activo: true,
+                        inventario_id: inv.id,
+                        metodo: 'unido'
+                    }
+                }));
                 onClose();
                 showAlert('¡Conectado!', `Te has unido al inventario ${formData.num}`, 'success');
             } else {

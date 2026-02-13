@@ -69,6 +69,7 @@ export interface AppState {
     acciones: Accion[];
     proformas: Proforma[];
     verificacion: unknown;
+    conteosEnProceso: any[];
     sesionActual: {
         numero: string | null;
         creadoPor: string | null;
@@ -109,6 +110,7 @@ const initialState: AppState = {
     acciones: [],
     proformas: [],
     verificacion: {},
+    conteosEnProceso: [],
     sesionActual: { numero: null, creadoPor: null, inicio: null, activo: false }
 };
 
@@ -202,32 +204,53 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     // FETCH ACTIVE INVENTORY ON START
     const syncServerSession = useCallback(async () => {
         try {
-            console.log("📡 Sincronizando sesión con el servidor...");
-            // Usamos la misma acción que Postman para ser consistentes
-            const response = await apiCall('listar_inventarios&solo_activos=true', 'GET');
+            const response = await apiCall('listar_conteos_iniciados', 'GET');
+            if (response.success && response.inventario) {
+                const active = response.inventario;
 
-            if (response.success) {
-                const inventarios = response.inventarios || [];
-                console.log(`📋 ${inventarios.length} inventarios activos reportados por el servidor.`);
+                setState((prev: AppState) => {
+                    const isSameInv = prev.sesionActual.numero === active.numero_inventario;
+                    const newCEnP = response.conteos_en_proceso || [];
+                    const isSameCEnP = JSON.stringify(prev.conteosEnProceso) === JSON.stringify(newCEnP);
 
-                if (inventarios.length > 0) {
-                    // Tomamos el último por si acaso, aunque solo debería haber uno activo
-                    const active = inventarios[inventarios.length - 1];
-                    console.log("🔓 Inventario activo encontrado:", active.numero_inventario);
+                    // Determine stable start time: PRIORITIZE existing one to avoid flickering
+                    let stableInicio = prev.sesionActual.inicio;
 
-                    let inicioVal = active.fecha_inicio || '';
-                    if (inicioVal.startsWith('0000-00-00') || !inicioVal) {
-                        inicioVal = fmt12(new Date()); // Fallback
-                    } else {
-                        try {
-                            const dateObj = new Date(active.fecha_inicio);
-                            if (!isNaN(dateObj.getTime())) {
-                                inicioVal = fmt12(dateObj);
-                            }
-                        } catch (e) {
-                            console.warn("No se pudo formatear la fecha de inicio:", active.fecha_inicio);
+                    // IF the server explicitly gives us a valid date, we use it
+                    if (active.fecha_inicio && !active.fecha_inicio.startsWith('0000')) {
+                        const dateObj = new Date(active.fecha_inicio);
+                        if (!isNaN(dateObj.getTime())) {
+                            stableInicio = fmt12(dateObj);
+                        }
+                    } else if (active.fecha_hora_inicio && !active.fecha_hora_inicio.startsWith('0000')) {
+                        // Sometimes the field is named differently in some endpoints
+                        const dateObj = new Date(active.fecha_hora_inicio);
+                        if (!isNaN(dateObj.getTime())) {
+                            stableInicio = fmt12(dateObj);
                         }
                     }
+
+                    // Fallback to currently earliest count if still missing
+                    if (!stableInicio && newCEnP.length > 0) {
+                        const firstDate = newCEnP.reduce((earliest: string, c: any) => {
+                            const d = c.fecha_hora_inicio || c.fecha_inicio;
+                            if (!d || d.startsWith('0000')) return earliest;
+                            return (!earliest || d < earliest) ? d : earliest;
+                        }, '');
+                        if (firstDate) {
+                            stableInicio = fmt12(new Date(firstDate));
+                        }
+                    }
+
+                    // If we still don't have one (neither from state nor server), fallback once to now
+                    if (!stableInicio) {
+                        stableInicio = fmt12(new Date());
+                    }
+
+                    // Only update if something meaningful changed
+                    const needsUpdate = !isSameInv || !isSameCEnP || prev.sesionActual.inicio !== stableInicio || !prev.sesionActual.activo;
+
+                    if (!needsUpdate) return prev;
 
                     // CHECK LOCAL STORAGE TO SEE IF WE ARE ALREADY JOINED
                     let savedSessionNumber = null;
@@ -238,62 +261,77 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                                 const parsed = JSON.parse(saved);
                                 savedSessionNumber = parsed.sesionActual?.numero;
                             }
-                        } catch (e) { console.error(e); }
+                        } catch (e) { }
                     }
 
-                    // LOGIC:
-                    // 1. If currently joined to this exact inventory -> SYNC SILENTLY
-                    // 2. If not joined (or joined to old one) -> PROMPT USER
                     if (savedSessionNumber === active.numero_inventario) {
-                        console.log("🔄 Sincronizando datos de sesión actual...");
-                        setState((prev: AppState) => ({
+                        return {
                             ...prev,
+                            conteosEnProceso: newCEnP,
                             sesionActual: {
+                                ...prev.sesionActual,
                                 numero: active.numero_inventario,
                                 creadoPor: active.autorizado_por || 'Administración • Hervin',
-                                inicio: inicioVal,
+                                inicio: stableInicio,
                                 activo: true,
                                 inventario_id: active.id,
                                 metodo: prev.sesionActual.metodo || 'unido'
                             }
-                        }));
+                        };
                     } else {
-                        console.log("🆕 Nuevo inventario detectado. Solicitando confirmación...");
-                        // No auto-join. Ask user.
-                        showConfirm(
-                            'Inventario Activo Detectado',
-                            `Se ha detectado el inventario activo ${active.numero_inventario}. ¿Deseas unirte a la sesión?`,
-                            () => {
-                                updateSesionActual({
+                        return {
+                            ...prev,
+                            conteosEnProceso: newCEnP
+                        };
+                    }
+                });
+
+                // Trigger prompt separately with safety check
+                const currentLocal = typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('zs_app') || '{}') : {};
+                const currentNumber = currentLocal.sesionActual?.numero;
+                const isPrompting = notification?.type === 'confirm' && notification?.title === 'Inventario Activo Detectado';
+
+                if (currentNumber !== active.numero_inventario && !isPrompting) {
+                    console.log("🆕 Nuevo inventario detectado. Solicitando confirmación...");
+                    showConfirm(
+                        'Inventario Activo Detectado',
+                        `Se ha detectado el inventario activo ${active.numero_inventario}. ¿Deseas unirte a la sesión?`,
+                        () => {
+                            let promptInicio = active.fecha_inicio && !active.fecha_inicio.startsWith('0000') ? fmt12(new Date(active.fecha_inicio)) : fmt12(new Date());
+                            setState(p => ({
+                                ...p,
+                                sesionActual: {
                                     numero: active.numero_inventario,
                                     creadoPor: active.autorizado_por || 'Administración • Hervin',
-                                    inicio: inicioVal,
+                                    inicio: promptInicio,
                                     activo: true,
                                     inventario_id: active.id,
                                     metodo: 'unido'
-                                });
-                                showAlert('Conectado', `Te has unido al inventario ${active.numero_inventario}`, 'success');
-                            }
-                        );
-                    }
-
-                } else {
-                    console.log("🔒 El servidor confirma que NO hay inventarios activos.");
-                    clearSesionLocal();
+                                }
+                            }));
+                            showAlert('Conectado', `Te has unido al inventario ${active.numero_inventario}`, 'success');
+                        }
+                    );
                 }
-            } else {
-                console.warn("⚠️ Error al sincronizar con el servidor:", response.message);
-                if (response.message?.includes('No hay inventario activo')) {
-                    clearSesionLocal();
-                }
+            } else if (response.message?.includes('No hay inventario activo')) {
+                // Keep UI stable, only clear if explicitly told so and current session is active
+                setState(prev => {
+                    if (!prev.sesionActual.activo) return prev;
+                    return {
+                        ...prev,
+                        sesionActual: { numero: null, creadoPor: null, inicio: null, activo: false }
+                    };
+                });
             }
         } catch (e) {
             console.error("❌ Error syncing session:", e);
         }
-    }, [clearSesionLocal, showConfirm, showAlert]);
+    }, [showConfirm, showAlert]);
 
     useEffect(() => {
         syncServerSession();
+        const interval = setInterval(syncServerSession, 3000); // Polling cada 3 segundos
+        return () => clearInterval(interval);
     }, [syncServerSession]);
 
     const updateSesionActual = (data: Partial<AppState['sesionActual']>) => {

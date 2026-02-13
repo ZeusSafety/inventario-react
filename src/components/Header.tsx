@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
-import { useInventory } from '@/context/InventoryContext';
+import React, { useState, useEffect } from 'react';
+import { useInventory, fmt12 } from '@/context/InventoryContext';
 import { apiCall } from '@/lib/api';
 import {
     ClipboardCheck,
@@ -22,6 +22,12 @@ export default function Header({ onToggleSidebar, sidebarOpen = true }: HeaderPr
     const [showAsignar, setShowAsignar] = useState(false);
     const [showUnirse, setShowUnirse] = useState(false);
     const [showCerrar, setShowCerrar] = useState(false);
+    const [currentTime, setCurrentTime] = useState(new Date());
+
+    useEffect(() => {
+        const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+        return () => clearInterval(timer);
+    }, []);
 
     const s = state.sesionActual;
 
@@ -105,7 +111,7 @@ export default function Header({ onToggleSidebar, sidebarOpen = true }: HeaderPr
                         </button>
                         <div id="sesion-banner-global" className="flex-shrink-0">
                             {s.numero ? (
-                                <div className={`sesion-banner-top flex items-center px-4 py-2 rounded-[12px] border shadow-md animate-in fade-in slide-in-from-left-4 duration-300 ${s.metodo === 'asignado'
+                                <div className={`sesion-banner-top flex items-center px-4 py-2 rounded-[12px] border shadow-md transition-all duration-300 ${s.metodo === 'asignado'
                                     ? 'bg-blue-50 border-blue-200'
                                     : 'bg-orange-50 border-orange-200'
                                     }`}>
@@ -130,7 +136,7 @@ export default function Header({ onToggleSidebar, sidebarOpen = true }: HeaderPr
                                                 <span className={s.metodo === 'asignado' ? 'text-blue-300' : 'text-orange-300'}>|</span>
                                                 <span>Autoriza: {s.creadoPor?.split('•')[1] || s.creadoPor || '-'}</span>
                                                 <span className={s.metodo === 'asignado' ? 'text-blue-300' : 'text-orange-300'}>|</span>
-                                                <span>Inicio: {s.inicio || '-'}</span>
+                                                <span>Inicio: {fmt12(currentTime)}</span>
                                             </div>
                                         </div>
 

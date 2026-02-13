@@ -136,59 +136,127 @@ export default function CompararPage() {
 
         if (!state.sesionActual.inventario_id) {
             console.error('❌ No hay inventario_id activo');
-            // Ya no mostramos alerta aquí para evitar el error al cerrar sesión
-            // showAlert('Error', 'No hay un inventario activo...', 'error');
             return;
         }
 
         setLoading(true);
         try {
-            const apiUrl = `obtener_comparacion_${almacen}&inventario_id=${state.sesionActual.inventario_id}`;
-            console.log('📡 Llamando API:', apiUrl);
+            // 1. Obtener datos del sistema/comparación
+            const apiCompUrl = `obtener_comparacion_${almacen}&inventario_id=${state.sesionActual.inventario_id}`;
+            // 2. Obtener conteos físicos (detalles)
+            const apiConteoUrl = `obtener_detalle_conteo&conteo_id=${state.sesionActual.inventario_id}`;
 
-            const response = await apiCall(apiUrl);
-            console.log('📥 Respuesta recibida:', response);
+            console.log('📡 Llamando APIs en paralelo...');
+            const [compResponse, conteoResponse] = await Promise.all([
+                apiCall(apiCompUrl),
+                apiCall(apiConteoUrl)
+            ]);
 
-            if (response.success) {
-                // Manejar dos formatos de respuesta:
-                // 1. response.comparaciones (cuando hay comparación generada)
-                // 2. response.datos (cuando solo hay datos del sistema sin comparación)
+            console.log('📥 Respuesta Comparación:', compResponse);
+            console.log('📥 Respuesta Conteo:', conteoResponse);
 
-                let dataToDisplay: ComparacionItem[] = [];
+            if (compResponse.success) {
+                // Mapa para sumarizar conteo físico por código
+                const conteoMap = new Map<string, number>();
+                // Mapa Auxiliar por Nombre de Producto (fallback)
+                const conteoMapPorNombre = new Map<string, number>();
 
-                if (response.comparaciones && response.comparaciones.length > 0) {
-                    // Hay comparación generada
-                    console.log('✅ Comparación encontrada:', response.comparaciones.length, 'items');
-                    dataToDisplay = response.comparaciones;
-                } else if (response.datos && response.datos.length > 0) {
-                    // Solo hay datos del sistema, transformarlos al formato esperado
-                    console.log('📊 Datos del sistema encontrados:', response.datos.length, 'items');
-                    dataToDisplay = response.datos.map((dato: any) => ({
-                        id: dato.id,
-                        item: dato.item,
-                        producto: dato.producto,
-                        codigo: dato.codigo,
-                        cantidad_sistema: dato.cantidad_sistema,
-                        cantidad_fisica: 0, // Sin conteo físico aún
-                        resultado: -dato.cantidad_sistema, // Todo es faltante si no hay conteo
-                        estado: 'FALTANTE',
-                        unidad_medida: dato.unidad_medida || 'UND'
-                    }));
-                } else {
-                    console.log('⚠️ No hay datos ni comparaciones para este inventario (esperando carga de sistema)');
+                if (conteoResponse.success && conteoResponse.productos) {
+                    conteoResponse.productos.forEach((p: any) => {
+                        // Normalizar código 
+                        const codigo = String(p.codigo || '').trim().toLowerCase();
+                        const nombre = String(p.producto || '').trim().toLowerCase();
+                        const cantidad = Number(p.cantidad_fisica || p.cantidad || 0);
+
+                        // Agregar al mapa por código
+                        if (codigo) {
+                            conteoMap.set(codigo, (conteoMap.get(codigo) || 0) + cantidad);
+                        }
+                        // Agregar al mapa por nombre (fallback)
+                        if (nombre) {
+                            conteoMapPorNombre.set(nombre, (conteoMapPorNombre.get(nombre) || 0) + cantidad);
+                        }
+                    });
                 }
 
-                console.log('✅ Datos a mostrar:', dataToDisplay.length, 'items');
+                console.log('📊 Mapa de Conteo (x Código, size):', conteoMap.size);
+                console.log('📊 Mapa de Conteo (x Nombre, size):', conteoMapPorNombre.size);
+
+                let itemsBase: any[] = [];
+
+                if (compResponse.comparaciones && compResponse.comparaciones.length > 0) {
+                    itemsBase = compResponse.comparaciones;
+                } else if (compResponse.datos && compResponse.datos.length > 0) {
+                    itemsBase = compResponse.datos;
+                }
+
+                // Procesar y mezclar datos
+                const dataToDisplay: ComparacionItem[] = itemsBase.map((item: any) => {
+                    // Normalizar código del sistema
+                    const codigo = String(item.codigo || '').trim().toLowerCase();
+                    const nombre = String(item.producto || '').trim().toLowerCase();
+
+                    // Obtener conteo físico del mapa (suma de cajas + stands)
+                    let cantFisica = 0;
+
+                    if (conteoMap.has(codigo)) {
+                        cantFisica = conteoMap.get(codigo) || 0;
+                    } else if (conteoMapPorNombre.has(nombre)) {
+                        // Fallback por nombre si el código falla (ej. espacios ocultos o ceros a la izquierda diferentes)
+                        console.warn(`⚠️ Match por nombre usado para: ${item.producto} (${item.codigo})`);
+                        cantFisica = conteoMapPorNombre.get(nombre) || 0;
+                    }
+
+                    // Si el backend envió una cantidad física (porque quizá lo procesó parcialmente),
+                    // Y nuestra lógica dio 0, podríamos considerar usar la del backend si es mayor a 0.
+                    // Esto ayuda si el mapa falló completamente.
+                    if (cantFisica === 0 && Number(item.cantidad_fisica) > 0) {
+                        cantFisica = Number(item.cantidad_fisica);
+                    }
+
+                    const cantSistema = Number(item.cantidad_sistema || 0);
+                    const diferencia = cantFisica - cantSistema;
+
+                    let estado: 'CONFORME' | 'SOBRANTE' | 'FALTANTE' = 'CONFORME';
+                    if (diferencia > 0) estado = 'SOBRANTE';
+                    if (diferencia < 0) estado = 'FALTANTE';
+
+                    return {
+                        id: item.id || Math.random(), // Fallback ID
+                        item: item.item,
+                        producto: item.producto,
+                        codigo: item.codigo,
+                        cantidad_sistema: cantSistema,
+                        cantidad_fisica: cantFisica,
+                        resultado: diferencia,
+                        estado: estado,
+                        unidad_medida: item.unidad_medida || 'UND'
+                    };
+                });
+
+                // Calcular nuevo resumen basado en los datos procesados
+                const nuevoResumen: Resumen = {
+                    total_productos: dataToDisplay.length,
+                    conformes: dataToDisplay.filter(i => i.estado === 'CONFORME').length,
+                    sobrantes: dataToDisplay.filter(i => i.estado === 'SOBRANTE').length,
+                    faltantes: dataToDisplay.filter(i => i.estado === 'FALTANTE').length,
+                    total_sistema: dataToDisplay.reduce((acc, i) => acc + i.cantidad_sistema, 0),
+                    total_fisico: dataToDisplay.reduce((acc, i) => acc + i.cantidad_fisica, 0),
+                    diferencia_total: dataToDisplay.reduce((acc, i) => acc + i.resultado, 0)
+                };
+
+                console.log('✅ Datos procesados:', dataToDisplay.length, 'items');
                 setComparacionData(dataToDisplay);
-                setResumen(response.resumen || null);
-                setSistemaCargado(response.sistema_cargado || dataToDisplay.length > 0);
+                setResumen(nuevoResumen);
+                setSistemaCargado(dataToDisplay.length > 0);
+
             } else {
-                console.error('❌ Error en respuesta:', response.message);
-                showAlert('Error', response.message || 'No se pudo obtener la comparación', 'error');
+                console.error('❌ Error en respuesta:', compResponse.message);
+                showAlert('Error', compResponse.message || 'No se pudo obtener la comparación', 'error');
             }
         } catch (error) {
             console.error('❌ Error de conexión:', error);
-            showAlert('Error', 'Error al cargar comparación', 'error');
+            showAlert('Error', 'Error al cargar comparación y conteos', 'error');
         } finally {
             setLoading(false);
         }

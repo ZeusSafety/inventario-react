@@ -150,26 +150,24 @@ export default function IniciarConteoModal({ isOpen, onClose, almacen, tipo, onC
                             {TIENDAS.map((t) => {
                                 const isSelected = formData.tienda === t;
 
-                                // Verificar si la tienda ya fue registrada para este inventario y TIPO ESPECÍFICO
+                                // 1. Verificar si la tienda ya fue registrada para este inventario y TIPO ESPECÍFICO
                                 const isCompleted = state.sesiones.malvinas?.some((s: any) =>
                                     s.numero === state.sesionActual.numero &&
                                     s.tienda === t &&
                                     s.tipo === tipo
                                 );
 
-                                // Definir estilos por tienda
-                                let colorClassStr = '';
-                                switch (t) {
-                                    case 'TIENDA 3006': colorClassStr = 'blue'; break; // Principal
-                                    case 'TIENDA 3006 B': colorClassStr = 'indigo'; break;
-                                    case 'TIENDA 3131': colorClassStr = 'emerald'; break;
-                                    case 'TIENDA 3133': colorClassStr = 'amber'; break;
-                                    case 'TIENDA 412-A': colorClassStr = 'rose'; break;
-                                    default: colorClassStr = 'gray';
-                                }
+                                // 2. Verificar si está en proceso por alguien más (Polling)
+                                const isInProgress = state.conteosEnProceso?.some((c: any) =>
+                                    c.tienda_nombre === t &&
+                                    c.almacen_nombre === 'Malvinas' &&
+                                    c.tipo_conteo === (tipo === 'cajas' ? 'por_cajas' : 'por_stand') &&
+                                    c.estado === 'en_proceso'
+                                );
 
-                                // Mapeo de clases dinámicas para Tailwind no purgue (aunque mejor usar style si son muchos, o clases completas)
-                                // Usaremos un objeto mapeador para ser explícitos y seguros con Tailwind
+                                const isDisabled = isCompleted || isInProgress;
+
+                                // Definir estilos por tienda
                                 const styles: any = {
                                     'TIENDA 3006': { bg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-700', icon: 'text-blue-600', selBorder: 'border-blue-600', selBg: 'bg-blue-100' },
                                     'TIENDA 3006 B': { bg: 'bg-indigo-50', border: 'border-indigo-200', text: 'text-indigo-700', icon: 'text-indigo-600', selBorder: 'border-indigo-600', selBg: 'bg-indigo-100' },
@@ -183,25 +181,25 @@ export default function IniciarConteoModal({ isOpen, onClose, almacen, tipo, onC
                                 return (
                                     <div
                                         key={t}
-                                        onClick={() => !isCompleted && setFormData({ ...formData, tienda: t })}
+                                        onClick={() => !isDisabled && setFormData({ ...formData, tienda: t })}
                                         className={`
                                             relative overflow-hidden group
                                             flex flex-col items-center justify-center p-4 text-center
                                             border-2 rounded-xl transition-all duration-300 transform
-                                            ${isCompleted
-                                                ? 'opacity-50 grayscale cursor-not-allowed border-gray-200 bg-gray-50'
+                                            ${isDisabled
+                                                ? 'opacity-60 grayscale cursor-not-allowed border-gray-200 bg-gray-50'
                                                 : 'cursor-pointer'
                                             }
-                                            ${!isCompleted && isSelected
+                                            ${!isDisabled && isSelected
                                                 ? `${s.selBorder} ${s.selBg} shadow-md scale-[1.02]`
-                                                : !isCompleted && `${s.border} bg-white hover:bg-gray-50 hover:shadow-sm hover:scale-[1.01]`
+                                                : !isDisabled && `${s.border} bg-white hover:bg-gray-50 hover:shadow-sm hover:scale-[1.01]`
                                             }
                                         `}
                                     >
-                                        {/* Indicador de selección (Check) o Candado si está completado */}
+                                        {/* Indicador de selección (Check) */}
                                         <div className={`
                                             absolute top-2 right-2 w-5 h-5 rounded-full flex items-center justify-center transition-all duration-300
-                                            ${isSelected && !isCompleted ? `${s.text} bg-white scale-100 shadow-sm` : 'scale-0'}
+                                            ${isSelected && !isDisabled ? `${s.text} bg-white scale-100 shadow-sm` : 'scale-0'}
                                         `}>
                                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
@@ -211,15 +209,16 @@ export default function IniciarConteoModal({ isOpen, onClose, almacen, tipo, onC
                                         {/* Icono de Tienda */}
                                         <div className={`
                                             p-3 rounded-full mb-3 transition-colors duration-300
-                                            ${isSelected && !isCompleted ? 'bg-white shadow-sm' : `${s.bg}`}
-                                            ${isCompleted ? 'bg-gray-200' : ''}
+                                            ${isSelected && !isDisabled ? 'bg-white shadow-sm' : `${s.bg}`}
+                                            ${isDisabled ? 'bg-gray-200' : ''}
                                         `}>
-                                            <Store className={`w-6 h-6 ${isCompleted ? 'text-gray-400' : s.icon}`} />
+                                            <Store className={`w-6 h-6 ${isDisabled ? 'text-gray-400' : s.icon}`} />
                                         </div>
 
-                                        <span className={`text-xs font-bold uppercase tracking-tight ${isSelected && !isCompleted ? s.text : 'text-gray-600'} ${isCompleted ? 'text-gray-400' : ''}`}>
+                                        <span className={`text-xs font-bold uppercase tracking-tight ${isSelected && !isDisabled ? s.text : 'text-gray-600'} ${isDisabled ? 'text-gray-400' : ''}`}>
                                             {t}
-                                            {isCompleted && <span className="block text-[8px] text-red-500 mt-1 font-extrabold">COMPLETADO</span>}
+                                            {isCompleted && <span className="block text-[8px] text-red-500 mt-1 font-extrabold uppercase">Completado</span>}
+                                            {isInProgress && <span className="block text-[8px] text-amber-600 mt-1 font-extrabold uppercase">En Proceso</span>}
                                         </span>
                                     </div>
                                 );
