@@ -158,18 +158,18 @@ export default function IniciarConteoModal({ isOpen, onClose, almacen, tipo, onC
                             {TIENDAS_MAP.map(({ id, t }) => {
                                 const isSelected = formData.tienda === t;
 
-                                // 1. Verificar si la tienda ya fue registrada (En historial o en sesión activa)
+                                // 1. Verificar si la tienda ya fue registrada (En historial o en sesión activa) PARA ESTE TIPO
                                 const isCompletedHistorial = state.sesiones.malvinas?.some((s: any) =>
                                     s.numero === state.sesionActual.numero &&
-                                    s.tienda === t
+                                    s.tienda === t &&
+                                    s.tipo === tipo
                                 );
 
-                                const isCompletedActivo = activeCounts?.[t]?.conteos_por_stand?.some((c: any) => c.estado === 'finalizado') ||
-                                    activeCounts?.[t]?.conteos_por_cajas?.some((c: any) => c.estado === 'finalizado');
+                                const isCompletedActivo = tipo === 'cajas'
+                                    ? activeCounts?.[t]?.conteos_por_cajas?.some((c: any) => c.estado === 'finalizado')
+                                    : activeCounts?.[t]?.conteos_por_stand?.some((c: any) => c.estado === 'finalizado');
 
-                                // El usuario dice "solo debe dejar una vez cada uno", por lo que si ya hay un conteo finalizado
-                                // para esa tienda en esta sesión (sea del tipo que sea, o al menos del tipo actual), lo bloqueamos.
-                                // Si queremos ser estrictos con "una vez cada uno" (tienda), quitamos la validación de tipo.
+                                // Ahora el estado es independiente: Si contaste cajas, stand sigue disponible.
                                 const isCompleted = isCompletedHistorial || isCompletedActivo;
 
                                 // 2. Verificar si está en proceso por alguien más (Polling)

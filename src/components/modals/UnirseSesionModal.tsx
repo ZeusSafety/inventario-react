@@ -13,13 +13,29 @@ interface Props {
 
 export default function UnirseSesionModal({ isOpen, onClose }: Props) {
     const { state, setState, updateSesionActual, showAlert } = useInventory();
-    const [formData, setFormData] = useState({
-        num: state.sesionActual.numero || '',
+    const [formData, setFormData] = React.useState({
+        num: '',
         area: 'Administración',
         persona: 'Hervin',
         otro: ''
     });
     const [loading, setLoading] = useState(false);
+
+    React.useEffect(() => {
+        if (isOpen && state.detectedInventory) {
+            setFormData(prev => ({
+                ...prev,
+                num: state.detectedInventory!.numero,
+                area: 'Administración',
+                persona: 'Hervin'
+            }));
+        } else if (isOpen && state.sesionActual.numero) {
+            setFormData(prev => ({
+                ...prev,
+                num: state.sesionActual.numero || '',
+            }));
+        }
+    }, [isOpen, state.detectedInventory, state.sesionActual.numero]);
 
     const handleSave = async () => {
         if (!formData.num.trim()) {
@@ -92,26 +108,35 @@ export default function UnirseSesionModal({ isOpen, onClose }: Props) {
             title={<><Link2 className="w-5 h-5" /> Unirse a Inventario Existente</>}
             size="sm"
             footer={
-                <>
-                    <button className="btn btn-secondary" onClick={onClose}>Cancelar</button>
-                    <button className="btn btn-primary" onClick={handleSave} disabled={loading}>
-                        {loading ? 'Unirse' : 'Unirse'}
+                <div className="flex justify-end gap-3 w-full">
+                    <button
+                        className="px-6 py-2.5 bg-slate-500 hover:bg-slate-600 text-white rounded-lg font-bold transition-all shadow-sm active:scale-95"
+                        onClick={onClose}
+                    >
+                        Cancelar
                     </button>
-                </>
+                    <button
+                        className="px-6 py-2.5 bg-[#007bff] hover:bg-blue-600 text-white rounded-lg font-bold transition-all shadow-sm active:scale-95 disabled:opacity-50"
+                        onClick={handleSave}
+                        disabled={loading}
+                    >
+                        {loading ? 'Uniéndose...' : 'Unirse'}
+                    </button>
+                </div>
             }
         >
-            <div className="space-y-6 pt-2">
-                <div className="bg-blue-50 p-3 rounded-xl border border-blue-100 mb-4">
+            <div className="space-y-6 pt-2 pb-2">
+                <div className="bg-blue-50 p-3 rounded-xl border border-blue-100 mb-2">
                     <p className="text-[11px] text-blue-700 font-medium m-0 leading-tight">
-                        Ingrese el número de inventario que ya fue asignado por un jefe o colega.
+                        Ingrese o verifique los datos para unirse a la sesión activa.
                     </p>
                 </div>
 
-                <div className="grid grid-cols-1 gap-5">
+                <div className="grid grid-cols-1 gap-6">
                     <div className="relative">
-                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 absolute -top-2 left-3 bg-white px-1 z-10">Número de Inventario</label>
+                        <label className="block text-[10px] font-black text-blue-500 uppercase mb-1 absolute -top-2 left-3 bg-white px-1 z-10 tracking-tighter">Número de Inventario</label>
                         <input
-                            className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-gray-600 font-bold focus:outline-none focus:border-[#0B3B8C] transition-all"
+                            className="w-full px-4 py-4 bg-gray-50 border border-gray-100 rounded-2xl text-gray-700 font-bold focus:outline-none focus:border-blue-400 transition-all shadow-sm text-lg"
                             placeholder="Ej: INV-2025-214"
                             value={formData.num}
                             onChange={(e) => setFormData({ ...formData, num: e.target.value })}
@@ -119,9 +144,9 @@ export default function UnirseSesionModal({ isOpen, onClose }: Props) {
                     </div>
 
                     <div className="relative">
-                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 absolute -top-2 left-3 bg-white px-1 z-10">Tu Área</label>
+                        <label className="block text-[10px] font-black text-blue-500 uppercase mb-1 absolute -top-2 left-3 bg-white px-1 z-10 tracking-tighter">Tu Área</label>
                         <select
-                            className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-gray-600 font-bold focus:outline-none focus:border-[#0B3B8C] transition-all appearance-none"
+                            className="w-full px-4 py-4 bg-gray-50 border border-gray-100 rounded-2xl text-gray-700 font-bold focus:outline-none focus:border-blue-400 transition-all appearance-none shadow-sm text-lg"
                             value={formData.area}
                             onChange={(e) => setFormData({ ...formData, area: e.target.value })}
                         >
@@ -133,9 +158,9 @@ export default function UnirseSesionModal({ isOpen, onClose }: Props) {
                     </div>
 
                     <div className="relative">
-                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 absolute -top-2 left-3 bg-white px-1 z-10">Tu Nombre</label>
+                        <label className="block text-[10px] font-black text-blue-500 uppercase mb-1 absolute -top-2 left-3 bg-white px-1 z-10 tracking-tighter">Tu Nombre</label>
                         <select
-                            className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-gray-600 font-bold focus:outline-none focus:border-[#0B3B8C] transition-all appearance-none"
+                            className="w-full px-4 py-4 bg-gray-50 border border-gray-100 rounded-2xl text-gray-700 font-bold focus:outline-none focus:border-blue-400 transition-all appearance-none shadow-sm text-lg"
                             value={formData.persona}
                             onChange={(e) => setFormData({ ...formData, persona: e.target.value })}
                         >
@@ -148,9 +173,9 @@ export default function UnirseSesionModal({ isOpen, onClose }: Props) {
 
                     {formData.persona === 'Otro' && (
                         <div className="relative animate-in zoom-in-95 duration-200">
-                            <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 absolute -top-2 left-3 bg-white px-1 z-10">Especifique Nombre</label>
+                            <label className="block text-[10px] font-black text-blue-500 uppercase mb-1 absolute -top-2 left-3 bg-white px-1 z-10 tracking-tighter">Especifique Nombre</label>
                             <input
-                                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-gray-600 font-bold focus:outline-none focus:border-[#0B3B8C] transition-all"
+                                className="w-full px-4 py-4 bg-gray-50 border border-gray-100 rounded-2xl text-gray-700 font-bold focus:outline-none focus:border-blue-400 transition-all shadow-sm"
                                 placeholder="..."
                                 value={formData.otro}
                                 onChange={(e) => setFormData({ ...formData, otro: e.target.value })}

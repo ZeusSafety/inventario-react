@@ -18,9 +18,9 @@ interface HeaderProps {
 }
 
 export default function Header({ onToggleSidebar, sidebarOpen = true }: HeaderProps) {
-    const { state, updateSesionActual, showAlert, showConfirm } = useInventory();
+    const { state, updateSesionActual, setShowUnirseModal, showAlert, showConfirm } = useInventory();
     const [showAsignar, setShowAsignar] = useState(false);
-    const [showUnirse, setShowUnirse] = useState(false);
+    // const [showUnirse, setShowUnirse] = useState(false); // Eliminado para usar global
     const [showCerrar, setShowCerrar] = useState(false);
     const [currentTime, setCurrentTime] = useState(new Date());
 
@@ -187,7 +187,7 @@ export default function Header({ onToggleSidebar, sidebarOpen = true }: HeaderPr
 
                         {/* Unirse N° Button */}
                         <button
-                            onClick={() => setShowUnirse(true)}
+                            onClick={() => setShowUnirseModal(true)}
                             className="flex items-center gap-2 px-4 py-2 bg-white border border-[#198754] text-[#198754] rounded-full btn-oval hover:bg-green-50 transition-all text-xs font-bold shadow-sm"
                         >
                             <Link2 className="w-4 h-4" />
@@ -202,8 +202,8 @@ export default function Header({ onToggleSidebar, sidebarOpen = true }: HeaderPr
                 onClose={() => setShowAsignar(false)}
             />
             <UnirseSesionModal
-                isOpen={showUnirse}
-                onClose={() => setShowUnirse(false)}
+                isOpen={state.showUnirseModal}
+                onClose={() => setShowUnirseModal(false)}
             />
             <CerrarSesionModal
                 isOpen={showCerrar}

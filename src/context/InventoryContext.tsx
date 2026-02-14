@@ -70,6 +70,13 @@ export interface AppState {
     proformas: Proforma[];
     verificacion: unknown;
     conteosEnProceso: any[];
+    showUnirseModal: boolean;
+    lastNotifiedInventory: string | null;
+    detectedInventory: {
+        numero: string;
+        id: number | string;
+        autorizado: string;
+    } | null;
     sesionActual: {
         numero: string | null;
         creadoPor: string | null;
@@ -84,6 +91,7 @@ interface InventoryContextType {
     state: AppState;
     setState: React.Dispatch<React.SetStateAction<AppState>>;
     updateSesionActual: (data: Partial<AppState['sesionActual']>) => void;
+    setShowUnirseModal: (val: boolean) => void;
     addAccion: (accion: Accion) => void;
     loadProformas: () => Promise<void>;
     notification: FeedbackState | null;
@@ -111,6 +119,9 @@ const initialState: AppState = {
     proformas: [],
     verificacion: {},
     conteosEnProceso: [],
+    showUnirseModal: false,
+    lastNotifiedInventory: null,
+    detectedInventory: null,
     sesionActual: { numero: null, creadoPor: null, inicio: null, activo: false }
 };
 
@@ -289,29 +300,34 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                 // Trigger prompt separately with safety check
                 const currentLocal = typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('zs_app') || '{}') : {};
                 const currentNumber = currentLocal.sesionActual?.numero;
+                const lastNotified = currentLocal.lastNotifiedInventory;
+                const modalUnirseAbierto = currentLocal.showUnirseModal;
                 const isPrompting = notification?.type === 'confirm' && notification?.title === 'Inventario Activo Detectado';
 
-                if (currentNumber !== active.numero_inventario && !isPrompting) {
+                // Si no estamos en ese inventario, no hemos avisado antes de ESTE número, no hay modal de unirse abierto y no estamos preguntando ya...
+                if (currentNumber !== active.numero_inventario && lastNotified !== active.numero_inventario && !modalUnirseAbierto && !isPrompting) {
                     console.log("🆕 Nuevo inventario detectado. Solicitando confirmación...");
                     showConfirm(
                         'Inventario Activo Detectado',
                         `Se ha detectado el inventario activo ${active.numero_inventario}. ¿Deseas unirte a la sesión?`,
                         () => {
-                            let promptInicio = active.fecha_inicio && !active.fecha_inicio.startsWith('0000') ? fmt12(new Date(active.fecha_inicio)) : fmt12(new Date());
-                            setState(p => ({
-                                ...p,
-                                sesionActual: {
+                            // Al confirmar, marcamos como notificado y abrimos el modal detallado
+                            setState(prev => ({
+                                ...prev,
+                                lastNotifiedInventory: active.numero_inventario,
+                                detectedInventory: {
                                     numero: active.numero_inventario,
-                                    creadoPor: active.autorizado_por || 'Administración • Hervin',
-                                    inicio: promptInicio,
-                                    activo: true,
-                                    inventario_id: active.id,
-                                    metodo: 'unido'
-                                }
+                                    id: active.id,
+                                    autorizado: active.autorizado_por || 'Administración • Hervin'
+                                },
+                                showUnirseModal: true
                             }));
-                            showAlert('Conectado', `Te has unido al inventario ${active.numero_inventario}`, 'success');
                         }
                     );
+
+                    // También marcamos como notificado inmediatamente para evitar que el siguiente ciclo de polling (3s) lo vuelva a disparar 
+                    // antes de que el usuario responda al Confirm
+                    setState(prev => ({ ...prev, lastNotifiedInventory: active.numero_inventario }));
                 }
             } else if (response.message?.includes('No hay inventario activo')) {
                 // Keep UI stable, only clear if explicitly told so and current session is active
@@ -362,11 +378,16 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         }
     }, []);
 
+    const setShowUnirseModal = (val: boolean) => {
+        setState((prev: AppState) => ({ ...prev, showUnirseModal: val }));
+    };
+
     return (
         <InventoryContext.Provider value={{
             state,
             setState,
             updateSesionActual,
+            setShowUnirseModal,
             addAccion,
             loadProformas,
             notification,
