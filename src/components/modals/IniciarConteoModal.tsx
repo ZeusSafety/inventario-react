@@ -11,16 +11,26 @@ interface Props {
     almacen: 'Callao' | 'Malvinas';
     tipo: 'cajas' | 'stand';
     onConfirm: (data: any) => void;
+    activeCounts?: any; // Datos de conteos de la sesión activa
 }
 
-export default function IniciarConteoModal({ isOpen, onClose, almacen, tipo, onConfirm }: Props) {
+const TIENDAS_MAP = [
+    { id: 1, t: 'TIENDA 3006' },
+    { id: 2, t: 'TIENDA 3006 B' },
+    { id: 3, t: 'TIENDA 3131' },
+    { id: 4, t: 'TIENDA 3133' },
+    { id: 5, t: 'TIENDA 412-A' },
+];
+
+export default function IniciarConteoModal({ isOpen, onClose, almacen, tipo, onConfirm, activeCounts }: Props) {
     const { state, showAlert } = useInventory();
     const [formData, setFormData] = useState({
         numero: state.sesionActual.numero || '',
         registrado: 'Joseph',
         otro: '',
         inicio: fmt12(),
-        tienda: ''
+        tienda: '',
+        tienda_id: null as number | null
     });
 
     useEffect(() => {
@@ -39,8 +49,6 @@ export default function IniciarConteoModal({ isOpen, onClose, almacen, tipo, onC
         }
         return () => clearInterval(timer);
     }, [isOpen, state.sesionActual.numero]);
-
-    const TIENDAS = ['TIENDA 3006', 'TIENDA 3006 B', 'TIENDA 3131', 'TIENDA 3133', 'TIENDA 412-A'];
 
     const handleSave = () => {
         if (!formData.numero.trim()) {
@@ -147,15 +155,22 @@ export default function IniciarConteoModal({ isOpen, onClose, almacen, tipo, onC
                             Seleccionar Tienda:
                         </label>
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                            {TIENDAS.map((t) => {
+                            {TIENDAS_MAP.map(({ id, t }) => {
                                 const isSelected = formData.tienda === t;
 
-                                // 1. Verificar si la tienda ya fue registrada para este inventario y TIPO ESPECÍFICO
-                                const isCompleted = state.sesiones.malvinas?.some((s: any) =>
+                                // 1. Verificar si la tienda ya fue registrada (En historial o en sesión activa)
+                                const isCompletedHistorial = state.sesiones.malvinas?.some((s: any) =>
                                     s.numero === state.sesionActual.numero &&
-                                    s.tienda === t &&
-                                    s.tipo === tipo
+                                    s.tienda === t
                                 );
+
+                                const isCompletedActivo = activeCounts?.[t]?.conteos_por_stand?.some((c: any) => c.estado === 'finalizado') ||
+                                    activeCounts?.[t]?.conteos_por_cajas?.some((c: any) => c.estado === 'finalizado');
+
+                                // El usuario dice "solo debe dejar una vez cada uno", por lo que si ya hay un conteo finalizado
+                                // para esa tienda en esta sesión (sea del tipo que sea, o al menos del tipo actual), lo bloqueamos.
+                                // Si queremos ser estrictos con "una vez cada uno" (tienda), quitamos la validación de tipo.
+                                const isCompleted = isCompletedHistorial || isCompletedActivo;
 
                                 // 2. Verificar si está en proceso por alguien más (Polling)
                                 const isInProgress = state.conteosEnProceso?.some((c: any) =>
@@ -181,7 +196,7 @@ export default function IniciarConteoModal({ isOpen, onClose, almacen, tipo, onC
                                 return (
                                     <div
                                         key={t}
-                                        onClick={() => !isDisabled && setFormData({ ...formData, tienda: t })}
+                                        onClick={() => !isDisabled && setFormData({ ...formData, tienda: t, tienda_id: id })}
                                         className={`
                                             relative overflow-hidden group
                                             flex flex-col items-center justify-center p-4 text-center
@@ -217,7 +232,7 @@ export default function IniciarConteoModal({ isOpen, onClose, almacen, tipo, onC
 
                                         <span className={`text-xs font-bold uppercase tracking-tight ${isSelected && !isDisabled ? s.text : 'text-gray-600'} ${isDisabled ? 'text-gray-400' : ''}`}>
                                             {t}
-                                            {isCompleted && <span className="block text-[8px] text-red-500 mt-1 font-extrabold uppercase">Completado</span>}
+                                            {isCompleted && <span className="block text-[8px] text-green-600 mt-1 font-extrabold uppercase">Completado</span>}
                                             {isInProgress && <span className="block text-[8px] text-amber-600 mt-1 font-extrabold uppercase">En Proceso</span>}
                                         </span>
                                     </div>

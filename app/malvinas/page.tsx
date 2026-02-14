@@ -125,32 +125,49 @@ export default function MalvinasPage() {
     const invNumNorm = (invNum || '').trim().toUpperCase();
     const sesionesMalvinas = state.sesiones.malvinas || [];
 
-    // Cajas
+    // Lógica Global de Malvinas: Se considera completado si las 5 tiendas tienen un conteo finalizado (Ya sea por Cajas o por Stand)
+    const tiendasTerminadas = TIENDAS.filter(t => {
+        const enHistorial = sesionesMalvinas.some((s: any) =>
+            (s.numero || '').trim().toUpperCase() === invNumNorm && s.tienda === t
+        );
+        const enActivo = activeSessionCounts?.[t]?.conteos_por_cajas?.some((c: any) => c.estado === 'finalizado') ||
+            activeSessionCounts?.[t]?.conteos_por_stand?.some((c: any) => c.estado === 'finalizado');
+        return enHistorial || enActivo;
+    });
+
+    const totalContadas = tiendasTerminadas.length;
+    const todoCompletado = totalContadas === TIENDAS.length && TIENDAS.length > 0;
+
+    // Conteo específico por tipo (solo para mostrar el número en el botón si se desea, pero el estado será global)
     const tiendasCajasHechas = TIENDAS.filter(t => {
         const enHistorial = sesionesMalvinas.some((s: any) => (s.numero || '').trim().toUpperCase() === invNumNorm && s.tienda === t && s.tipo === 'cajas');
         const enActivo = activeSessionCounts?.[t]?.conteos_por_cajas?.some((c: any) => c.estado === 'finalizado');
         return enHistorial || enActivo;
     }).length;
 
-    const cajasCompletado = tiendasCajasHechas === TIENDAS.length && TIENDAS.length > 0;
-    const cajasEnProcesoHeader = state.conteosEnProceso?.some((c: any) =>
-        (c.almacen_nombre || '').trim().toLowerCase() === 'malvinas' &&
-        (c.tipo_conteo || '').toLowerCase().includes('cajas') &&
-        c.estado === 'en_proceso'
-    );
-
-    // Stand
     const tiendasStandHechas = TIENDAS.filter(t => {
         const enHistorial = sesionesMalvinas.some((s: any) => (s.numero || '').trim().toUpperCase() === invNumNorm && s.tienda === t && s.tipo === 'stand');
         const enActivo = activeSessionCounts?.[t]?.conteos_por_stand?.some((c: any) => c.estado === 'finalizado');
         return enHistorial || enActivo;
     }).length;
 
-    const standCompletado = tiendasStandHechas === TIENDAS.length && TIENDAS.length > 0;
+    // Los botones se mostrarán verdes si todas las tiendas están cubiertas
+    const cajasCompletadoGlobal = todoCompletado;
+    const standCompletadoGlobal = todoCompletado;
+
+    // Indicadores de proceso: Solo mostrar cargando si hay algo en proceso QUE NO ESTÉ YA TERMINADO
+    const cajasEnProcesoHeader = state.conteosEnProceso?.some((c: any) =>
+        (c.almacen_nombre || '').trim().toLowerCase() === 'malvinas' &&
+        (c.tipo_conteo || '').toLowerCase().includes('cajas') &&
+        c.estado === 'en_proceso' &&
+        !tiendasTerminadas.includes(c.tienda_nombre)
+    );
+
     const standEnProcesoHeader = state.conteosEnProceso?.some((c: any) =>
         (c.almacen_nombre || '').trim().toLowerCase() === 'malvinas' &&
         (c.tipo_conteo || '').toLowerCase().includes('stand') &&
-        c.estado === 'en_proceso'
+        c.estado === 'en_proceso' &&
+        !tiendasTerminadas.includes(c.tienda_nombre)
     );
 
     // Detección de bloqueo en tiempo real
@@ -205,8 +222,43 @@ export default function MalvinasPage() {
             }
         }
 
+        // Registrar en backend que se inicia el conteo (Para que otros lo vean "En Proceso")
+        const startRes = await apiCall('iniciar_conteo', 'POST', {
+            numero_inventario: state.sesionActual.numero, // Usamos el del estado actual
+            almacen_id: 2, // 2 para Malvinas
+            tienda_id: data.tienda_id,
+            registrado_por: data.registrado,
+            tipo_conteo: data.tipo === 'cajas' ? 'por_cajas' : 'por_stand',
+            origen_datos: 'sistema'
+        });
+
+        if (!startRes.success) {
+            showAlert('Error', 'No pudo iniciarse el conteo en el servidor: ' + startRes.message, 'error');
+            return;
+        }
+
+        // El ID del conteo puede venir como conteo_id o id según el endpoint
+        const cid = startRes.conteo_id || startRes.id || (startRes.conteo && startRes.conteo.id);
+
+        if (!cid) {
+            console.warn("No se recibió conteo_id del servidor", startRes);
+        }
+
+        // Actualización optimista para que el botón naranja salga YA
+        setState((prev: any) => ({
+            ...prev,
+            conteosEnProceso: [...(prev.conteosEnProceso || []), {
+                conteo_id: cid,
+                almacen_nombre: 'Malvinas',
+                tienda_nombre: data.tienda,
+                tipo_conteo: data.tipo === 'cajas' ? 'por_cajas' : 'por_stand',
+                estado: 'en_proceso'
+            }]
+        }));
+
         setCurrentConteo({
             ...data,
+            conteo_id: cid,
             filas: initialFilas
         });
         setIsIniciarOpen(false);
@@ -325,10 +377,19 @@ export default function MalvinasPage() {
                     cantidad_fisica: isNaN(val) ? 0 : val,
                     observacion: '',
                     fecha: fmt12(),
-                    tipo_conteo: currentConteo.tipo,
+                    tipo_conteo: currentConteo.tipo === 'cajas' ? 'por_cajas' : 'por_stand',
                     almacen: 'Malvinas',
                     tienda: currentConteo.tienda,
+                    tienda_id: currentConteo.tienda_id, // Agregado por solicitud del usuario
                     registrado_por: currentConteo.registrado
+                });
+            }
+
+            // Notificar al servidor que el conteo ha terminado
+            if (currentConteo.conteo_id) {
+                await apiCall('finalizar_conteo', 'POST', {
+                    conteo_id: currentConteo.conteo_id,
+                    archivo_pdf: null
                 });
             }
 
@@ -373,12 +434,17 @@ export default function MalvinasPage() {
 
     const getTiendaStatus = (tienda: string) => {
         // 1. Verificar si está completado en el historial
-        const completado = (state.sesiones.malvinas || []).some((s: any) =>
+        const completadoHistorial = (state.sesiones.malvinas || []).some((s: any) =>
             s.tienda === tienda && s.numero === state.sesionActual.numero && s.fin
         );
-        if (completado) return 'listo';
 
-        // 2. Verificar si está en proceso por alguien más (vía conteosEnProceso)
+        // 2. Verificar si está completado en la sesión activa (polling)
+        const completadoActivo = activeSessionCounts?.[tienda]?.conteos_por_stand?.some((c: any) => c.estado === 'finalizado') ||
+            activeSessionCounts?.[tienda]?.conteos_por_cajas?.some((c: any) => c.estado === 'finalizado');
+
+        if (completadoHistorial || completadoActivo) return 'listo';
+
+        // 3. Verificar si está en proceso por alguien más (vía conteosEnProceso)
         const enProceso = state.conteosEnProceso?.some((c: any) =>
             c.tienda_nombre === tienda &&
             c.almacen_nombre === 'Malvinas' &&
@@ -523,16 +589,16 @@ export default function MalvinasPage() {
                                     setTipoConteo('cajas');
                                     setIsIniciarOpen(true);
                                 }}
-                                className={`flex items-center space-x-1.5 px-6 py-2 rounded-full btn-oval font-semibold transition-all duration-200 shadow-sm text-xs ${cajasCompletado
+                                className={`flex items-center space-x-1.5 px-6 py-2 rounded-full btn-oval font-semibold transition-all duration-200 shadow-sm text-xs ${cajasCompletadoGlobal
                                     ? 'bg-green-100 text-green-700 border border-green-200 cursor-not-allowed opacity-80'
                                     : cajasEnProcesoHeader
                                         ? 'bg-amber-100 text-amber-700 border border-amber-200 hover:shadow-md'
                                         : 'bg-gradient-to-br from-[#E9F1FF] to-[#D9E6FF] hover:from-[#D9E6FF] hover:to-[#C9D6FF] text-[#0B3B8C] hover:shadow-md hover:scale-105 active:scale-[0.98]'
                                     }`}
-                                disabled={cajasCompletado}
+                                disabled={cajasCompletadoGlobal}
                             >
-                                {cajasCompletado ? <ShieldCheck className="w-4 h-4" /> : cajasEnProcesoHeader ? <Loader2 className="w-4 h-4 animate-spin" /> : <Box className="w-4 h-4" />}
-                                <span>{cajasCompletado ? 'Cajas: Completado' : `Conteo por Cajas ${tiendasCajasHechas}/${TIENDAS.length}`}</span>
+                                {cajasCompletadoGlobal ? <ShieldCheck className="w-4 h-4" /> : cajasEnProcesoHeader ? <Loader2 className="w-4 h-4 animate-spin" /> : <Box className="w-4 h-4" />}
+                                <span>{cajasCompletadoGlobal ? 'Cajas: Completado' : `Conteo por Cajas ${tiendasCajasHechas}/${TIENDAS.length}`}</span>
                             </button>
                             <button
                                 onClick={() => {
@@ -540,16 +606,16 @@ export default function MalvinasPage() {
                                     setTipoConteo('stand');
                                     setIsIniciarOpen(true);
                                 }}
-                                className={`flex items-center space-x-1.5 px-6 py-2 rounded-full btn-oval font-semibold transition-all duration-200 shadow-sm text-xs ${standCompletado
+                                className={`flex items-center space-x-1.5 px-6 py-2 rounded-full btn-oval font-semibold transition-all duration-200 shadow-sm text-xs ${standCompletadoGlobal
                                     ? 'bg-green-100 text-green-700 border border-green-200 cursor-not-allowed opacity-80'
                                     : standEnProcesoHeader
                                         ? 'bg-amber-100 text-amber-700 border border-amber-200 hover:shadow-md'
                                         : 'bg-gradient-to-br from-[#E9F1FF] to-[#D9E6FF] hover:from-[#D9E6FF] hover:to-[#C9D6FF] text-[#0B3B8C] hover:shadow-md hover:scale-105 active:scale-[0.98]'
                                     }`}
-                                disabled={standCompletado}
+                                disabled={standCompletadoGlobal}
                             >
-                                {standCompletado ? <ShieldCheck className="w-4 h-4" /> : standEnProcesoHeader ? <Loader2 className="w-4 h-4 animate-spin" /> : <Columns className="w-4 h-4" />}
-                                <span>{standCompletado ? 'Stand: Completado' : `Conteo de Stand ${tiendasStandHechas}/${TIENDAS.length}`}</span>
+                                {standCompletadoGlobal ? <ShieldCheck className="w-4 h-4" /> : standEnProcesoHeader ? <Loader2 className="w-4 h-4 animate-spin" /> : <Columns className="w-4 h-4" />}
+                                <span>{standCompletadoGlobal ? 'Stand: Completado' : `Conteo de Stand ${tiendasStandHechas}/${TIENDAS.length}`}</span>
                             </button>
                         </div>
                     </header>
@@ -798,6 +864,7 @@ export default function MalvinasPage() {
                 almacen="Malvinas"
                 tipo={tipoConteo}
                 onConfirm={handleIniciarConfirm}
+                activeCounts={activeSessionCounts}
             />
 
             <Modal

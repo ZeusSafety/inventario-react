@@ -196,8 +196,43 @@ export default function CallaoPage() {
             }
         }
 
+        // Registrar en backend que se inicia el conteo (Para que otros lo vean "En Proceso")
+        const startRes = await apiCall('iniciar_conteo', 'POST', {
+            numero_inventario: state.sesionActual.numero, // Usamos el del estado actual
+            almacen_id: 1, // 1 para Callao
+            tienda_id: null,
+            registrado_por: data.registrado,
+            tipo_conteo: data.tipo === 'cajas' ? 'por_cajas' : 'por_stand',
+            origen_datos: 'sistema'
+        });
+
+        if (!startRes.success) {
+            showAlert('Error', 'No pudo iniciarse el conteo en el servidor: ' + startRes.message, 'error');
+            return;
+        }
+
+        // El ID del conteo puede venir como conteo_id o id según el endpoint
+        const cid = startRes.conteo_id || startRes.id || (startRes.conteo && startRes.conteo.id);
+
+        if (!cid) {
+            console.warn("No se recibió conteo_id del servidor", startRes);
+        }
+
+        // Actualización optimista para que el botón naranja salga YA
+        setState((prev: any) => ({
+            ...prev,
+            conteosEnProceso: [...(prev.conteosEnProceso || []), {
+                conteo_id: cid,
+                almacen_nombre: 'Callao',
+                tipo_conteo: data.tipo === 'cajas' ? 'por_cajas' : 'por_stand',
+                estado: 'en_proceso',
+                tienda_nombre: null
+            }]
+        }));
+
         setCurrentConteo({
             ...data,
+            conteo_id: cid,
             filas: initialFilas
         });
         setIsIniciarOpen(false);
@@ -321,9 +356,17 @@ export default function CallaoPage() {
                     cantidad_fisica: isNaN(val) ? 0 : val,
                     observacion: '',
                     fecha: fmt12(),
-                    tipo_conteo: currentConteo.tipo,
+                    tipo_conteo: currentConteo.tipo === 'cajas' ? 'por_cajas' : 'por_stand',
                     almacen: 'Callao',
                     registrado_por: currentConteo.registrado
+                });
+            }
+
+            // Notificar al servidor que el conteo ha terminado
+            if (currentConteo.conteo_id) {
+                await apiCall('finalizar_conteo', 'POST', {
+                    conteo_id: currentConteo.conteo_id,
+                    archivo_pdf: null // Opcional
                 });
             }
 
