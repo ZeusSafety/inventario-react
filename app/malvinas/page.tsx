@@ -375,7 +375,8 @@ export default function MalvinasPage() {
                 await apiCall('registrar_conteo', 'POST', {
                     inventario_id: state.sesionActual.inventario_id,
                     detalle_id: fila.id || fila.codigo,
-                    cantidad_fisica: isNaN(val) ? 0 : val,
+                    cantidad: isNaN(val) ? 0 : val, // Cambiado de cantidad_fisica a cantidad para coincidir con la DB
+                    cantidad_fisica: isNaN(val) ? 0 : val, // Mantenemos ambos por seguridad
                     observacion: '',
                     fecha: fmt12(),
                     tipo_conteo: currentConteo.tipo === 'cajas' ? 'por_cajas' : 'por_stand',
