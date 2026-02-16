@@ -1530,81 +1530,6 @@ def listar_inventarios(filtrar_activos=False):
             conn.close()
 
 # ============================================================
-# FUNCION OBTENER HISTORIAL DE CONTEOS FINALIZADOS
-# ============================================================
-def obtener_historial():
-    """
-    Obtiene el historial de todos los conteos finalizados para mostrar en el frontend
-    Devuelve información completa incluyendo registrado_por para identificar usuarios
-    """
-    try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        
-        # Obtener todos los conteos finalizados con información completa
-        cursor.execute("""
-            SELECT 
-                c.id,
-                c.numero_inventario,
-                c.inventario_id,
-                i.autorizado_por,
-                c.registrado_por,
-                c.tipo_conteo,
-                a.nombre as almacen,
-                t.nombre_tienda as tienda,
-                c.archivo_pdf,
-                c.estado,
-                DATE_FORMAT(c.fecha_hora_inicio, '%d/%m/%Y %H:%i:%s') as fecha_inicio,
-                DATE_FORMAT(c.fecha_hora_final, '%d/%m/%Y %H:%i:%s') as fecha_fin,
-                c.fecha_hora_inicio as orden_fecha
-            FROM conteos c
-            INNER JOIN inventarios i ON c.inventario_id = i.id
-            INNER JOIN almacenes a ON c.almacen_id = a.id
-            LEFT JOIN tiendas t ON c.tienda_id = t.id
-            WHERE c.estado = 'finalizado'
-            ORDER BY c.fecha_hora_inicio DESC
-            LIMIT 500
-        """)
-        
-        conteos = cursor.fetchall()
-        
-        # Transformar a formato esperado por el frontend
-        inventarios = []
-        for conteo in conteos:
-            inventarios.append({
-                'id': conteo['id'],
-                'numero_inventario': conteo['numero_inventario'],
-                'inventario_id': conteo['inventario_id'],
-                'autorizado_por': conteo['registrado_por'],  # Usuario que hizo el conteo
-                'tipo_conteo': conteo['tipo_conteo'],
-                'almacen': conteo['almacen'],
-                'tienda': conteo['tienda'],
-                'archivo_pdf': conteo['archivo_pdf'],
-                'estado': conteo['estado'],
-                'fecha_inicio': conteo['fecha_inicio'],
-                'fecha_fin': conteo['fecha_fin']
-            })
-        
-        return {
-            'success': True,
-            'inventarios': inventarios,
-            'total': len(inventarios)
-        }
-            
-    except Exception as e:
-        logging.error(f"Error en obtener_historial: {str(e)}")
-        return {
-            'success': False,
-            'message': 'Error al obtener historial',
-            'error': str(e)
-        }
-    finally:
-        if 'cursor' in locals():
-            cursor.close()
-        if 'conn' in locals():
-            conn.close()
-
-# ============================================================
 # FUNCION OBTENER INVENTARIO ACTIVO
 # ============================================================
 def obtener_inventario_activo():
@@ -1909,6 +1834,211 @@ def listar_conteos_malvinas(inventario_id):
         return {
             'success': False,
             'message': f'Error al listar conteos de Malvinas: {str(e)}',
+            'error': str(e)
+        }
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
+        if 'conn' in locals():
+            conn.close()
+
+
+# ============================================================
+# FUNCION PARA OBTENER HISTORIAL DE CONTEOS CALLAO (TODOS LOS USUARIOS)
+# ============================================================
+def obtener_historial_conteos_callao(page=1, per_page=10):
+    """
+    Obtiene el historial completo de conteos finalizados en almacén Callao
+    de TODOS los usuarios, sin filtrar por inventario_id.
+    Incluye paginación.
+    """
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # Obtener ID del almacén Callao
+        cursor.execute("SELECT id FROM almacenes WHERE nombre = 'Callao'")
+        almacen_callao = cursor.fetchone()
+        
+        if not almacen_callao:
+            return {'success': False, 'message': 'Almacén Callao no encontrado'}
+        
+        almacen_id = almacen_callao['id']
+        
+        # Obtener total de conteos para paginación
+        cursor.execute("""
+            SELECT COUNT(*) as total
+            FROM conteos c
+            WHERE c.almacen_id = %s 
+                AND c.estado = 'finalizado'
+        """, (almacen_id,))
+        
+        total_conteos = cursor.fetchone()['total']
+        total_pages = (total_conteos + per_page - 1) // per_page  # Ceiling division
+        
+        # Calcular offset para paginación
+        offset = (page - 1) * per_page
+        
+        # Obtener TODOS los conteos finalizados en Callao (TODOS los inventarios)
+        # Aplicar paginación aquí para obtener solo los de la página actual
+        cursor.execute("""
+            SELECT 
+                c.id,
+                c.numero_inventario,
+                c.registrado_por,
+                c.tipo_conteo,
+                DATE_FORMAT(c.fecha_hora_inicio, '%%Y-%%m-%%d %%H:%%i:%%s') as fecha_hora_inicio,
+                DATE_FORMAT(c.fecha_hora_final, '%%Y-%%m-%%d %%H:%%i:%%s') as fecha_hora_final,
+                c.archivo_pdf,
+                c.estado,
+                c.origen_datos,
+                c.inventario_id,
+                i.numero_inventario as inventario_numero,
+                COUNT(DISTINCT dc.id) as total_productos,
+                COALESCE(SUM(dc.cantidad), 0) as cantidad_total
+            FROM conteos c
+            LEFT JOIN detalle_conteo dc ON c.id = dc.conteo_id
+            LEFT JOIN inventarios i ON c.inventario_id = i.id
+            WHERE c.almacen_id = %s 
+                AND c.estado = 'finalizado'
+            GROUP BY c.id, c.numero_inventario, c.registrado_por, c.tipo_conteo,
+                     c.fecha_hora_inicio, c.fecha_hora_final, c.archivo_pdf,
+                     c.estado, c.origen_datos, c.inventario_id, i.numero_inventario
+            ORDER BY c.fecha_hora_final DESC
+            LIMIT %s OFFSET %s
+        """, (almacen_id, per_page, offset))
+        
+        todos_conteos = cursor.fetchall()
+        
+        # Separar por tipo de conteo después de obtener los resultados paginados
+        conteos_cajas = [c for c in todos_conteos if c['tipo_conteo'] == 'por_cajas']
+        conteos_stand = [c for c in todos_conteos if c['tipo_conteo'] == 'por_stand']
+        
+        return {
+            'success': True,
+            'almacen': 'Callao',
+            'conteos': todos_conteos,
+            'conteos_por_cajas': conteos_cajas,
+            'conteos_por_stand': conteos_stand,
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total': total_conteos,
+                'total_pages': total_pages,
+                'has_next': page < total_pages,
+                'has_prev': page > 1
+            }
+        }
+            
+    except Exception as e:
+        logging.error(f"Error en obtener_historial_conteos_callao: {str(e)}")
+        return {
+            'success': False,
+            'message': f'Error al obtener historial de conteos de Callao: {str(e)}',
+            'error': str(e)
+        }
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
+        if 'conn' in locals():
+            conn.close()
+
+
+# ============================================================
+# FUNCION PARA OBTENER HISTORIAL DE CONTEOS MALVINAS (TODOS LOS USUARIOS)
+# ============================================================
+def obtener_historial_conteos_malvinas(page=1, per_page=10):
+    """
+    Obtiene el historial completo de conteos finalizados en almacén Malvinas
+    de TODOS los usuarios, sin filtrar por inventario_id.
+    Incluye paginación.
+    """
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # Obtener ID del almacén Malvinas
+        cursor.execute("SELECT id FROM almacenes WHERE nombre = 'Malvinas'")
+        almacen_malvinas = cursor.fetchone()
+        
+        if not almacen_malvinas:
+            return {'success': False, 'message': 'Almacén Malvinas no encontrado'}
+        
+        almacen_id = almacen_malvinas['id']
+        
+        # Obtener total de conteos para paginación
+        cursor.execute("""
+            SELECT COUNT(*) as total
+            FROM conteos c
+            WHERE c.almacen_id = %s 
+                AND c.estado = 'finalizado'
+        """, (almacen_id,))
+        
+        total_conteos = cursor.fetchone()['total']
+        total_pages = (total_conteos + per_page - 1) // per_page  # Ceiling division
+        
+        # Calcular offset para paginación
+        offset = (page - 1) * per_page
+        
+        # Obtener todos los conteos finalizados en Malvinas (TODOS los inventarios)
+        cursor.execute("""
+            SELECT 
+                c.id,
+                c.numero_inventario,
+                c.registrado_por,
+                c.tipo_conteo,
+                DATE_FORMAT(c.fecha_hora_inicio, '%%Y-%%m-%%d %%H:%%i:%%s') as fecha_hora_inicio,
+                DATE_FORMAT(c.fecha_hora_final, '%%Y-%%m-%%d %%H:%%i:%%s') as fecha_hora_final,
+                c.archivo_pdf,
+                c.estado,
+                c.origen_datos,
+                c.inventario_id,
+                i.numero_inventario as inventario_numero,
+                c.tienda_id,
+                t.nombre_tienda,
+                COUNT(DISTINCT dc.id) as total_productos,
+                COALESCE(SUM(dc.cantidad), 0) as cantidad_total
+            FROM conteos c
+            LEFT JOIN detalle_conteo dc ON c.id = dc.conteo_id
+            LEFT JOIN inventarios i ON c.inventario_id = i.id
+            LEFT JOIN tiendas t ON c.tienda_id = t.id
+            WHERE c.almacen_id = %s 
+                AND c.estado = 'finalizado'
+            GROUP BY c.id, c.numero_inventario, c.registrado_por, c.tipo_conteo,
+                     c.fecha_hora_inicio, c.fecha_hora_final, c.archivo_pdf,
+                     c.estado, c.origen_datos, c.inventario_id, i.numero_inventario,
+                     c.tienda_id, t.nombre_tienda
+            ORDER BY c.fecha_hora_final DESC
+            LIMIT %s OFFSET %s
+        """, (almacen_id, per_page, offset))
+        
+        conteos = cursor.fetchall()
+        
+        # Separar por tipo de conteo
+        conteos_cajas = [c for c in conteos if c['tipo_conteo'] == 'por_cajas']
+        conteos_stand = [c for c in conteos if c['tipo_conteo'] == 'por_stand']
+        
+        return {
+            'success': True,
+            'almacen': 'Malvinas',
+            'conteos': conteos,
+            'conteos_por_cajas': conteos_cajas,
+            'conteos_por_stand': conteos_stand,
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total': total_conteos,
+                'total_pages': total_pages,
+                'has_next': page < total_pages,
+                'has_prev': page > 1
+            }
+        }
+            
+    except Exception as e:
+        logging.error(f"Error en obtener_historial_conteos_malvinas: {str(e)}")
+        return {
+            'success': False,
+            'message': f'Error al obtener historial de conteos de Malvinas: {str(e)}',
             'error': str(e)
         }
     finally:
@@ -4669,10 +4799,6 @@ def inventario_general_logistica(request):
             solo_activos = request.args.get('solo_activos', 'false').lower() == 'true'
             response_data = listar_inventarios(filtrar_activos=solo_activos)
             
-        # OBTENER HISTORIAL DE CONTEOS FINALIZADOS (GET)
-        elif action == 'obtener_historial' and method == 'GET':
-            response_data = obtener_historial()
-            
         # OBTENER INVENTARIO ACTIVO (GET)
         elif action == 'obtener_inventario_activo' and method == 'GET':
             response_data = obtener_inventario_activo()
@@ -4725,6 +4851,30 @@ def inventario_general_logistica(request):
                     response_data = listar_conteos_malvinas(inventario_id)
                 else:
                     response_data = inventario_activo
+                    
+        # OBTENER HISTORIAL DE CONTEOS CALLAO (GET) - TODOS LOS USUARIOS
+        elif action == 'obtener_historial_conteos_callao' and method == 'GET':
+            try:
+                page = int(request.args.get('page', 1))
+                per_page = int(request.args.get('per_page', 10))
+                response_data = obtener_historial_conteos_callao(page, per_page)
+            except (ValueError, TypeError):
+                response_data = {
+                    'success': False,
+                    'message': 'page y per_page deben ser números válidos'
+                }
+                    
+        # OBTENER HISTORIAL DE CONTEOS MALVINAS (GET) - TODOS LOS USUARIOS
+        elif action == 'obtener_historial_conteos_malvinas' and method == 'GET':
+            try:
+                page = int(request.args.get('page', 1))
+                per_page = int(request.args.get('per_page', 10))
+                response_data = obtener_historial_conteos_malvinas(page, per_page)
+            except (ValueError, TypeError):
+                response_data = {
+                    'success': False,
+                    'message': 'page y per_page deben ser números válidos'
+                }
                     
         # LISTAR PRODUCTOS DEL CATALOGO (GET)
         elif action == 'listar_productos_inventario' and method == 'GET':

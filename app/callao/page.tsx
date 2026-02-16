@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useInventory, fmt12 } from '@/context/InventoryContext';
 import { apiCall } from '@/lib/api';
-import { Building, Box, Columns, PlayCircle, FileText, Search, ShieldCheck, Loader2 } from 'lucide-react';
+import { Building, Box, Columns, PlayCircle, FileText, Search, ShieldCheck, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
 import IniciarConteoModal from '@/components/modals/IniciarConteoModal';
 import Modal from '@/components/Modal';
 import jsPDF from 'jspdf';
@@ -63,66 +63,107 @@ export default function CallaoPage() {
         return false;
     };
 
-    const cargarSesionesAPI = React.useCallback(async () => {
+    const [pageCallao, setPageCallao] = useState(1);
+    const [paginationCallao, setPaginationCallao] = useState<any>(null);
+    const [loadingHistorial, setLoadingHistorial] = useState(false);
+    const [nuevosConteosIds, setNuevosConteosIds] = useState<Set<number>>(new Set());
+    const [conteosAnterioresIds, setConteosAnterioresIds] = useState<Set<number>>(new Set());
+
+    const cargarSesionesAPI = React.useCallback(async (page: number = 1) => {
+        setLoadingHistorial(true);
         try {
-            // Obtener todos los inventarios
-            const inventariosRes = await apiCall('listar_inventarios', 'GET');
-            if (!inventariosRes.success || !inventariosRes.inventarios) return;
+            // Usar el nuevo endpoint que trae todos los conteos finalizados con paginación
+            const response = await apiCall(`obtener_historial_conteos_callao&page=${page}&per_page=10`, 'GET');
+            if (response.success) {
+                const allSessions: any[] = [];
 
-            const allSessions: any[] = [];
-
-            // Para cada inventario, obtener sus conteos de Callao
-            for (const inv of inventariosRes.inventarios) {
-                try {
-                    const response = await apiCall(`listar_conteos_callao&inventario_id=${inv.id}`, 'GET');
-                    if (response.success) {
-                        // Conteos por cajas
-                        if (response.conteos_por_cajas) {
-                            response.conteos_por_cajas.forEach((c: any) => {
-                                if (c.estado === 'finalizado') {
-                                    allSessions.push({
-                                        id: c.id,
-                                        numero: c.numero_inventario,
-                                        registrado: c.registrado_por,
-                                        inicio: c.fecha_hora_inicio,
-                                        fin: c.fecha_hora_final,
-                                        pdfUrl: c.archivo_pdf,
-                                        tipo: 'cajas',
-                                        filas: []
-                                    });
-                                }
-                            });
-                        }
-
-                        // Conteos por stand
-                        if (response.conteos_por_stand) {
-                            response.conteos_por_stand.forEach((c: any) => {
-                                if (c.estado === 'finalizado') {
-                                    allSessions.push({
-                                        id: c.id,
-                                        numero: c.numero_inventario,
-                                        registrado: c.registrado_por,
-                                        inicio: c.fecha_hora_inicio,
-                                        fin: c.fecha_hora_final,
-                                        pdfUrl: c.archivo_pdf,
-                                        tipo: 'stand',
-                                        filas: []
-                                    });
-                                }
-                            });
-                        }
-                    }
-                } catch (e) {
-                    console.error(`Error cargando conteos para inv ${inv.id}:`, e);
+                // Combinar conteos por cajas y por stand
+                if (response.conteos_por_cajas) {
+                    response.conteos_por_cajas.forEach((c: any) => {
+                        allSessions.push({
+                            id: c.id,
+                            numero: c.numero_inventario || c.inventario_numero,
+                            registrado: c.registrado_por,
+                            inicio: c.fecha_hora_inicio,
+                            fin: c.fecha_hora_final,
+                            pdfUrl: c.archivo_pdf,
+                            tipo: 'cajas',
+                            filas: []
+                        });
+                    });
                 }
-            }
 
-            setState((prev: any) => ({
-                ...prev,
-                sesiones: { ...prev.sesiones, callao: allSessions }
-            }));
+                if (response.conteos_por_stand) {
+                    response.conteos_por_stand.forEach((c: any) => {
+                        allSessions.push({
+                            id: c.id,
+                            numero: c.numero_inventario || c.inventario_numero,
+                            registrado: c.registrado_por,
+                            inicio: c.fecha_hora_inicio,
+                            fin: c.fecha_hora_final,
+                            pdfUrl: c.archivo_pdf,
+                            tipo: 'stand',
+                            filas: []
+                        });
+                    });
+                }
+
+                setPaginationCallao(response.pagination);
+                
+                // Si es la primera carga (set vacío), solo inicializar sin marcar como nuevos
+                const esPrimeraCarga = conteosAnterioresIds.size === 0;
+                
+                if (esPrimeraCarga) {
+                    // Primera carga: solo inicializar el set sin animaciones
+                    const todosIds = new Set<number>();
+                    allSessions.forEach((s: any) => todosIds.add(s.id));
+                    setConteosAnterioresIds(todosIds);
+                } else {
+                    // Cargas posteriores: detectar conteos nuevos
+                    const nuevosIds = new Set<number>();
+                    allSessions.forEach((s: any) => {
+                        if (!conteosAnterioresIds.has(s.id)) {
+                            nuevosIds.add(s.id);
+                        }
+                    });
+                    
+                    // Si hay conteos nuevos, agregarlos al set de nuevos conteos
+                    if (nuevosIds.size > 0) {
+                        setNuevosConteosIds(prev => {
+                            const nuevoSet = new Set(prev);
+                            nuevosIds.forEach(id => nuevoSet.add(id));
+                            return nuevoSet;
+                        });
+                        
+                        // Remover la animación después de 3 segundos
+                        nuevosIds.forEach(id => {
+                            setTimeout(() => {
+                                setNuevosConteosIds(prev => {
+                                    const nuevoSet = new Set(prev);
+                                    nuevoSet.delete(id);
+                                    return nuevoSet;
+                                });
+                            }, 3000);
+                        });
+                    }
+                    
+                    // Actualizar el set global de IDs vistos (acumulativo)
+                    setConteosAnterioresIds(prev => {
+                        const nuevoSet = new Set(prev);
+                        allSessions.forEach((s: any) => nuevoSet.add(s.id));
+                        return nuevoSet;
+                    });
+                }
+                
+                setState((prev: any) => ({
+                    ...prev,
+                    sesiones: { ...prev.sesiones, callao: allSessions }
+                }));
+            }
         } catch (e) {
             console.error('Error al cargar historial:', e);
+        } finally {
+            setLoadingHistorial(false);
         }
     }, [setState]);
 
@@ -143,14 +184,14 @@ export default function CallaoPage() {
     }, [state.sesionActual.inventario_id]);
 
     useEffect(() => {
-        cargarSesionesAPI();
+        cargarSesionesAPI(pageCallao);
         sincronizarConteosLocales();
         const interval = setInterval(() => {
-            cargarSesionesAPI();
+            cargarSesionesAPI(pageCallao);
             sincronizarConteosLocales();
         }, 3000);
         return () => clearInterval(interval);
-    }, [cargarSesionesAPI, sincronizarConteosLocales]);
+    }, [cargarSesionesAPI, sincronizarConteosLocales, pageCallao]);
 
     // Verificar estado actual del inventario activo
     const invNum = state.sesionActual.numero;
@@ -864,8 +905,8 @@ export default function CallaoPage() {
                     </div>
 
                     <div className="bg-white rounded-2xl shadow-lg border border-gray-200/60 overflow-hidden">
-                        <div className="overflow-x-auto">
-                            <table className="w-full">
+                        <div className="overflow-hidden">
+                            <table className="w-full table-auto">
                                 <thead>
                                     <tr className="border-b-[4px]" style={{ backgroundColor: '#002D5A', borderColor: '#F4B400' }}>
                                         <th className="px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider text-white whitespace-nowrap">ID</th>
@@ -902,11 +943,17 @@ export default function CallaoPage() {
                                             const bgColor = getUserColor(s.registrado || '');
                                             const textColor = getUserTextColor(s.registrado || '');
 
+                                            const esNuevo = nuevosConteosIds.has(s.id);
+                                            
                                             return (
                                                 <tr
                                                     key={s.id}
-                                                    className="transition-colors border-b border-gray-100 hover:opacity-90"
-                                                    style={{ backgroundColor: bgColor }}
+                                                    className={`border-b border-gray-100 hover:opacity-90 ${
+                                                        esNuevo ? 'animate-pulse-new' : ''
+                                                    }`}
+                                                    style={{ 
+                                                        backgroundColor: esNuevo ? `rgba(11, 59, 140, 0.08)` : bgColor
+                                                    }}
                                                 >
                                                     <td className="px-4 py-3 whitespace-nowrap text-[10px] font-medium" style={{ color: textColor }}>{idx + 1}</td>
                                                     <td className="px-4 py-3 whitespace-nowrap text-[10px]" style={{ color: textColor }}>{s.inicio}</td>
@@ -930,6 +977,47 @@ export default function CallaoPage() {
                                 </tbody>
                             </table>
                         </div>
+                        
+                        {/* Paginación */}
+                        {paginationCallao && (
+                            <div className="bg-gradient-to-r from-gray-50 to-gray-100 px-4 py-3 flex items-center justify-between border-t border-gray-200">
+                                <button
+                                    onClick={() => setPageCallao(1)}
+                                    disabled={pageCallao === 1 || loadingHistorial}
+                                    className="px-3 py-1.5 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 shadow-sm"
+                                    style={{ fontFamily: 'var(--font-poppins)' }}
+                                >
+                                    «
+                                </button>
+                                <button
+                                    onClick={() => setPageCallao(prev => Math.max(1, prev - 1))}
+                                    disabled={!paginationCallao.has_prev || loadingHistorial}
+                                    className="px-3 py-1.5 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 shadow-sm"
+                                    style={{ fontFamily: 'var(--font-poppins)' }}
+                                >
+                                    &lt;
+                                </button>
+                                <span className="text-xs text-gray-700 font-semibold" style={{ fontFamily: 'var(--font-poppins)' }}>
+                                    Página {pageCallao} de {paginationCallao.total_pages}
+                                </span>
+                                <button
+                                    onClick={() => setPageCallao(prev => prev + 1)}
+                                    disabled={!paginationCallao.has_next || loadingHistorial}
+                                    className="px-3 py-1.5 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 shadow-sm"
+                                    style={{ fontFamily: 'var(--font-poppins)' }}
+                                >
+                                    &gt;
+                                </button>
+                                <button
+                                    onClick={() => setPageCallao(paginationCallao.total_pages)}
+                                    disabled={pageCallao === paginationCallao.total_pages || loadingHistorial}
+                                    className="px-3 py-1.5 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 shadow-sm"
+                                    style={{ fontFamily: 'var(--font-poppins)' }}
+                                >
+                                    »
+                                </button>
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>
