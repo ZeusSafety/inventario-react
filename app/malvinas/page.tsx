@@ -73,26 +73,69 @@ export default function MalvinasPage() {
 
     const cargarSesionesAPI = React.useCallback(async () => {
         try {
-            const response = await apiCall('obtener_historial', 'GET');
-            if (response.success && response.inventarios) {
-                const filtered = response.inventarios
-                    .filter((inv: any) => (inv.almacen || '').trim().toLowerCase() === 'malvinas')
-                    .map((inv: any) => ({
-                        id: inv.id,
-                        numero: inv.numero_inventario,
-                        registrado: inv.autorizado_por,
-                        inicio: inv.fecha_inicio,
-                        fin: inv.fecha_fin,
-                        pdfUrl: inv.archivo_pdf,
-                        tienda: inv.tienda || '-',
-                        tipo: (inv.tipo_conteo || '').toLowerCase().includes('cajas') ? 'cajas' : 'stand',
-                        filas: []
-                    }));
-                setState((prev: any) => ({
-                    ...prev,
-                    sesiones: { ...prev.sesiones, malvinas: filtered }
-                }));
+            // Obtener todos los inventarios
+            const inventariosRes = await apiCall('listar_inventarios', 'GET');
+            if (!inventariosRes.success || !inventariosRes.inventarios) return;
+
+            const allSessions: any[] = [];
+
+            // Para cada inventario, obtener sus conteos de Malvinas
+            for (const inv of inventariosRes.inventarios) {
+                try {
+                    const response = await apiCall(`listar_conteos_malvinas&inventario_id=${inv.id}`, 'GET');
+                    if (response.success && response.tiendas) {
+                        // Iterar por cada tienda
+                        Object.keys(response.tiendas).forEach(tienda => {
+                            const tiendaData = response.tiendas[tienda];
+
+                            // Conteos por cajas
+                            if (tiendaData.conteos_por_cajas) {
+                                tiendaData.conteos_por_cajas.forEach((c: any) => {
+                                    if (c.estado === 'finalizado') {
+                                        allSessions.push({
+                                            id: c.id,
+                                            numero: c.numero_inventario,
+                                            registrado: c.registrado_por,
+                                            inicio: c.fecha_hora_inicio,
+                                            fin: c.fecha_hora_final,
+                                            pdfUrl: c.archivo_pdf,
+                                            tienda: tienda,
+                                            tipo: 'cajas',
+                                            filas: []
+                                        });
+                                    }
+                                });
+                            }
+
+                            // Conteos por stand
+                            if (tiendaData.conteos_por_stand) {
+                                tiendaData.conteos_por_stand.forEach((c: any) => {
+                                    if (c.estado === 'finalizado') {
+                                        allSessions.push({
+                                            id: c.id,
+                                            numero: c.numero_inventario,
+                                            registrado: c.registrado_por,
+                                            inicio: c.fecha_hora_inicio,
+                                            fin: c.fecha_hora_final,
+                                            pdfUrl: c.archivo_pdf,
+                                            tienda: tienda,
+                                            tipo: 'stand',
+                                            filas: []
+                                        });
+                                    }
+                                });
+                            }
+                        });
+                    }
+                } catch (e) {
+                    console.error(`Error cargando conteos para inv ${inv.id}:`, e);
+                }
             }
+
+            setState((prev: any) => ({
+                ...prev,
+                sesiones: { ...prev.sesiones, malvinas: allSessions }
+            }));
         } catch (e) {
             console.error('Error al cargar historial:', e);
         }
@@ -257,13 +300,62 @@ export default function MalvinasPage() {
             }]
         }));
 
+        // CRÍTICO: Cargar los detalle_id reales del conteo recién creado
+        let rowsWithIds = initialFilas;
+        if (cid) {
+            try {
+                // Esperar un momento para que el SP termine de cargar
+                await new Promise(resolve => setTimeout(resolve, 500));
+                const detailRes = await apiCall(`obtener_detalle_conteo&conteo_id=${cid}`, 'GET');
+                if (detailRes.success && detailRes.productos) {
+                    rowsWithIds = detailRes.productos.map((p: any) => ({
+                        ...p,
+                        cantidad_conteo: ''
+                    }));
+                    console.log(`✅ IDs reales cargados para Malvinas ${cid}: ${rowsWithIds.length} filas`);
+                }
+            } catch (e) {
+                console.error("Error al cargar IDs reales en Malvinas:", e);
+            }
+        }
+
         setCurrentConteo({
             ...data,
             conteo_id: cid,
-            filas: initialFilas
+            filas: rowsWithIds
         });
         setIsIniciarOpen(false);
         setIsAvisoOpen(true);
+    };
+
+    const handleSaveIndividual = async (codigo: string) => {
+        if (!currentConteo || isLocked) return;
+        const fila = currentConteo.filas.find((f: any) => f.codigo === codigo);
+        if (!fila || fila.cantidad_conteo === '') return;
+
+        const val = Number(fila.cantidad_conteo);
+        const id_a_enviar = fila.detalle_id || fila.id;
+
+        if (!id_a_enviar) {
+            console.warn("⚠️ No hay detalle_id aún para", codigo);
+            return;
+        }
+
+        try {
+            // Usamos actualizar_masivo incluso para uno solo para asegurar que se guarde tanto cantidad como unidad
+            await apiCall('actualizar_masivo', 'POST', {
+                conteo_id: currentConteo.conteo_id,
+                usuario: currentConteo.registrado || 'Sistema',
+                productos: [{
+                    detalle_id: id_a_enviar,
+                    nueva_cantidad: isNaN(val) ? 0 : val,
+                    nueva_unidad_medida: fila.unidad_medida || 'UNIDAD'
+                }]
+            });
+            console.log(`💾 Auto-guardado individual (Malvinas): ${codigo} -> ${val} (${fila.unidad_medida})`);
+        } catch (e) {
+            console.error("❌ Error auto-guardando Malvinas:", e);
+        }
     };
 
     const handleAvisoEntendido = () => {
@@ -367,23 +459,19 @@ export default function MalvinasPage() {
                 filas: currentConteo.filas.filter((f: any) => f.cantidad_conteo !== '')
             };
 
-            // Guardar solo los que tienen conteo (o ceros explícitos si fuera necesario, pero mantenemos la lógica de no ensuciar BD con vacíos)
+            // Guardar solo los que tienen conteo
             const filasAGuardar = currentConteo.filas.filter((f: any) => f.cantidad_conteo !== '');
 
-            for (const fila of filasAGuardar) {
-                const val = Number(fila.cantidad_conteo);
-                await apiCall('registrar_conteo', 'POST', {
-                    inventario_id: state.sesionActual.inventario_id,
-                    detalle_id: fila.id || fila.codigo,
-                    cantidad: isNaN(val) ? 0 : val, // Cambiado de cantidad_fisica a cantidad para coincidir con la DB
-                    cantidad_fisica: isNaN(val) ? 0 : val, // Mantenemos ambos por seguridad
-                    observacion: '',
-                    fecha: fmt12(),
-                    tipo_conteo: currentConteo.tipo === 'cajas' ? 'por_cajas' : 'por_stand',
-                    almacen: 'Malvinas',
-                    tienda: currentConteo.tienda,
-                    tienda_id: currentConteo.tienda_id, // Agregado por solicitud del usuario
-                    registrado_por: currentConteo.registrado
+            if (filasAGuardar.length > 0) {
+                // Usar actualización masiva
+                await apiCall('actualizar_masivo', 'POST', {
+                    conteo_id: currentConteo.conteo_id,
+                    usuario: currentConteo.registrado || 'Sistema',
+                    productos: filasAGuardar.map((f: any) => ({
+                        detalle_id: f.detalle_id || f.id,
+                        nueva_cantidad: Number(f.cantidad_conteo),
+                        nueva_unidad_medida: f.unidad_medida || 'UNIDAD'
+                    }))
                 });
             }
 
@@ -741,6 +829,8 @@ export default function MalvinasPage() {
                                                                     className="w-24 px-2 py-1 text-center bg-white border border-gray-200 rounded-lg text-xs font-bold focus:border-[#0B3B8C] outline-none transition-all"
                                                                     value={p.cantidad_conteo}
                                                                     onChange={(e) => handleUpdateCantidad(p.codigo, e.target.value)}
+                                                                    onBlur={() => handleSaveIndividual(p.codigo)}
+                                                                    onKeyDown={(e) => e.key === 'Enter' && handleSaveIndividual(p.codigo)}
                                                                     disabled={!!isLocked}
                                                                 />
                                                             </td>
@@ -749,6 +839,7 @@ export default function MalvinasPage() {
                                                                     className="w-28 bg-white border border-gray-200 rounded-lg text-xs font-bold focus:border-[#0B3B8C] outline-none transition-all p-1"
                                                                     value={p.unidad_medida || 'UNIDAD'}
                                                                     onChange={(e) => handleUpdateUnidad(p.codigo, e.target.value)}
+                                                                    onBlur={() => handleSaveIndividual(p.codigo)}
                                                                     disabled={!!isLocked}
                                                                 >
                                                                     <option value="UNIDAD">UNIDAD</option>
@@ -838,26 +929,48 @@ export default function MalvinasPage() {
                                             </td>
                                         </tr>
                                     ) : (
-                                        state.sesiones.malvinas.map((s: any, idx: number) => (
-                                            <tr key={s.id} className="hover:bg-blue-50/50 transition-colors border-b border-gray-100">
-                                                <td className="px-4 py-3 whitespace-nowrap text-[10px] font-medium text-gray-900">{idx + 1}</td>
-                                                <td className="px-4 py-3 whitespace-nowrap text-[10px] text-gray-700">{s.inicio}</td>
-                                                <td className="px-4 py-3 whitespace-nowrap text-[10px] text-gray-700">{s.numero}</td>
-                                                <td className="px-4 py-3 whitespace-nowrap text-[10px] text-gray-700">{s.tienda}</td>
-                                                <td className="px-4 py-3 whitespace-nowrap text-[10px] font-bold text-[#0B3B8C] uppercase">{s.tipo}</td>
-                                                <td className="px-4 py-3 whitespace-nowrap text-[10px] text-gray-700">{s.registrado}</td>
-                                                <td className="px-4 py-3 whitespace-nowrap text-[10px] text-gray-700">
-                                                    <button
-                                                        onClick={() => handleDownloadPDF(s)}
-                                                        className="inline-flex items-center space-x-1 px-2.5 py-1 bg-white border border-red-500 text-red-500 rounded-lg text-[10px] font-bold hover:bg-red-50 transition-all duration-200 shadow-sm"
-                                                    >
-                                                        <FileText className="w-3 h-3" />
-                                                        <span>PDF</span>
-                                                    </button>
-                                                </td>
-                                                <td className="px-4 py-3 whitespace-nowrap text-[10px] text-gray-700">{s.fin || '-'}</td>
-                                            </tr>
-                                        ))
+                                        state.sesiones.malvinas.map((s: any, idx: number) => {
+                                            // Generar color único basado en el usuario
+                                            const getUserColor = (usuario: string) => {
+                                                const hash = usuario.split('').reduce((acc, char) => char.charCodeAt(0) + ((acc << 5) - acc), 0);
+                                                const hue = Math.abs(hash % 360);
+                                                return `hsl(${hue}, 70%, 95%)`; // Color de fondo pastel
+                                            };
+
+                                            const getUserTextColor = (usuario: string) => {
+                                                const hash = usuario.split('').reduce((acc, char) => char.charCodeAt(0) + ((acc << 5) - acc), 0);
+                                                const hue = Math.abs(hash % 360);
+                                                return `hsl(${hue}, 70%, 35%)`; // Color de texto oscuro
+                                            };
+
+                                            const bgColor = getUserColor(s.registrado || '');
+                                            const textColor = getUserTextColor(s.registrado || '');
+
+                                            return (
+                                                <tr
+                                                    key={s.id}
+                                                    className="transition-colors border-b border-gray-100 hover:opacity-90"
+                                                    style={{ backgroundColor: bgColor }}
+                                                >
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] font-medium" style={{ color: textColor }}>{idx + 1}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px]" style={{ color: textColor }}>{s.inicio}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px]" style={{ color: textColor }}>{s.numero}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px]" style={{ color: textColor }}>{s.tienda}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] font-bold uppercase" style={{ color: textColor }}>{s.tipo}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] font-bold" style={{ color: textColor }}>{s.registrado}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px]">
+                                                        <button
+                                                            onClick={() => handleDownloadPDF(s)}
+                                                            className="inline-flex items-center space-x-1 px-2.5 py-1 bg-white border border-red-500 text-red-500 rounded-lg text-[10px] font-bold hover:bg-red-50 transition-all duration-200 shadow-sm"
+                                                        >
+                                                            <FileText className="w-3 h-3" />
+                                                            <span>PDF</span>
+                                                        </button>
+                                                    </td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px]" style={{ color: textColor }}>{s.fin || '-'}</td>
+                                                </tr>
+                                            );
+                                        })
                                     )}
                                 </tbody>
                             </table>
