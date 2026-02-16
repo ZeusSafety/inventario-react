@@ -50,7 +50,7 @@ const generarColorUsuario = (nombre: string): string => {
 };
 
 export default function RegistroPage() {
-    const { state } = useInventory();
+    const { state, showAlert } = useInventory();
     const [loadingCallao, setLoadingCallao] = useState(false);
     const [loadingMalvinas, setLoadingMalvinas] = useState(false);
     const [conteosCallao, setConteosCallao] = useState<any[]>([]);
@@ -76,6 +76,7 @@ export default function RegistroPage() {
                 
                 // Si es la primera carga (set vacío), solo inicializar sin marcar como nuevos
                 const esPrimeraCarga = conteosAnterioresIds.size === 0;
+                let nuevosIds = new Set<number>();
                 
                 if (esPrimeraCarga) {
                     // Primera carga: solo inicializar el set sin animaciones
@@ -84,10 +85,13 @@ export default function RegistroPage() {
                     setConteosAnterioresIds(todosIds);
                 } else {
                     // Cargas posteriores: detectar conteos nuevos
-                    const nuevosIds = new Set<number>();
+                    nuevosIds = new Set<number>();
+                    const nuevosConteos: any[] = [];
+                    
                     todosConteos.forEach((c: any) => {
                         if (!conteosAnterioresIds.has(c.id)) {
                             nuevosIds.add(c.id);
+                            nuevosConteos.push(c);
                         }
                     });
                     
@@ -97,6 +101,23 @@ export default function RegistroPage() {
                             nuevosIds.forEach(id => nuevoSet.add(id));
                             return nuevoSet;
                         });
+                        
+                        // Mostrar notificación profesional
+                        if (nuevosConteos.length === 1) {
+                            const conteo = nuevosConteos[0];
+                            const tipoTexto = conteo.tipo_conteo === 'por_cajas' ? 'Cajas' : 'Stand';
+                            showAlert(
+                                'Nuevo Conteo Registrado',
+                                `Se registró un conteo de tipo "${tipoTexto}" para el inventario "${conteo.numero_inventario || conteo.inventario_numero}" por ${conteo.registrado_por} en Callao`,
+                                'success'
+                            );
+                        } else {
+                            showAlert(
+                                'Nuevos Conteos Registrados',
+                                `Se registraron ${nuevosConteos.length} nuevos conteos en Callao`,
+                                'success'
+                            );
+                        }
                         
                         // Remover la animación después de 3 segundos
                         nuevosIds.forEach(id => {
@@ -118,7 +139,23 @@ export default function RegistroPage() {
                     });
                 }
                 
-                setConteosCallao(todosConteos);
+                // Ordenar: primero los nuevos, luego por número de inventario
+                const idsNuevosParaOrdenar = nuevosIds;
+                const conteosOrdenados = [...todosConteos].sort((a, b) => {
+                    const aEsNuevo = idsNuevosParaOrdenar.has(a.id);
+                    const bEsNuevo = idsNuevosParaOrdenar.has(b.id);
+                    
+                    // Si uno es nuevo y el otro no, el nuevo va primero
+                    if (aEsNuevo && !bEsNuevo) return -1;
+                    if (!aEsNuevo && bEsNuevo) return 1;
+                    
+                    // Si ambos son nuevos o ambos no son nuevos, ordenar por número de inventario
+                    const numA = ((a.numero_inventario || a.inventario_numero) || '').toUpperCase();
+                    const numB = ((b.numero_inventario || b.inventario_numero) || '').toUpperCase();
+                    return numA.localeCompare(numB);
+                });
+                
+                setConteosCallao(conteosOrdenados);
                 setPaginationCallao(response.pagination);
             }
         } catch (e) {
@@ -141,6 +178,7 @@ export default function RegistroPage() {
                 
                 // Si es la primera carga (set vacío), solo inicializar sin marcar como nuevos
                 const esPrimeraCarga = conteosAnterioresIds.size === 0;
+                let nuevosIds = new Set<number>();
                 
                 if (esPrimeraCarga) {
                     // Primera carga: solo inicializar el set sin animaciones
@@ -149,10 +187,13 @@ export default function RegistroPage() {
                     setConteosAnterioresIds(todosIds);
                 } else {
                     // Cargas posteriores: detectar conteos nuevos
-                    const nuevosIds = new Set<number>();
+                    nuevosIds = new Set<number>();
+                    const nuevosConteos: any[] = [];
+                    
                     todosConteos.forEach((c: any) => {
                         if (!conteosAnterioresIds.has(c.id)) {
                             nuevosIds.add(c.id);
+                            nuevosConteos.push(c);
                         }
                     });
                     
@@ -162,6 +203,23 @@ export default function RegistroPage() {
                             nuevosIds.forEach(id => nuevoSet.add(id));
                             return nuevoSet;
                         });
+                        
+                        // Mostrar notificación profesional
+                        if (nuevosConteos.length === 1) {
+                            const conteo = nuevosConteos[0];
+                            const tipoTexto = conteo.tipo_conteo === 'por_cajas' ? 'Cajas' : 'Stand';
+                            showAlert(
+                                'Nuevo Conteo Registrado',
+                                `Se registró un conteo de tipo "${tipoTexto}" para el inventario "${conteo.numero_inventario || conteo.inventario_numero}" por ${conteo.registrado_por} en ${conteo.nombre_tienda || 'Malvinas'}`,
+                                'success'
+                            );
+                        } else {
+                            showAlert(
+                                'Nuevos Conteos Registrados',
+                                `Se registraron ${nuevosConteos.length} nuevos conteos en Malvinas`,
+                                'success'
+                            );
+                        }
                         
                         // Remover la animación después de 3 segundos
                         nuevosIds.forEach(id => {
@@ -183,7 +241,23 @@ export default function RegistroPage() {
                     });
                 }
                 
-                setConteosMalvinas(todosConteos);
+                // Ordenar: primero los nuevos, luego por número de inventario
+                const idsNuevosParaOrdenar = nuevosIds;
+                const conteosOrdenados = [...todosConteos].sort((a, b) => {
+                    const aEsNuevo = idsNuevosParaOrdenar.has(a.id);
+                    const bEsNuevo = idsNuevosParaOrdenar.has(b.id);
+                    
+                    // Si uno es nuevo y el otro no, el nuevo va primero
+                    if (aEsNuevo && !bEsNuevo) return -1;
+                    if (!aEsNuevo && bEsNuevo) return 1;
+                    
+                    // Si ambos son nuevos o ambos no son nuevos, ordenar por número de inventario
+                    const numA = ((a.numero_inventario || a.inventario_numero) || '').toUpperCase();
+                    const numB = ((b.numero_inventario || b.inventario_numero) || '').toUpperCase();
+                    return numA.localeCompare(numB);
+                });
+                
+                setConteosMalvinas(conteosOrdenados);
                 setPaginationMalvinas(response.pagination);
             }
         } catch (e) {
@@ -210,9 +284,23 @@ export default function RegistroPage() {
     const todasLasSesiones = useMemo(() => {
         const callaoConAlmacen = conteosCallao.map(s => ({ ...s, almacen: 'Callao' }));
         const malvinasConAlmacen = conteosMalvinas.map(s => ({ ...s, almacen: 'Malvinas' }));
-        return [...callaoConAlmacen, ...malvinasConAlmacen]
-            .sort((a, b) => new Date(b.fecha_hora_final || b.fecha_hora_inicio).getTime() - new Date(a.fecha_hora_final || a.fecha_hora_inicio).getTime());
-    }, [conteosCallao, conteosMalvinas]);
+        const todos = [...callaoConAlmacen, ...malvinasConAlmacen];
+        
+        // Ordenar: primero los nuevos, luego por número de inventario
+        return todos.sort((a, b) => {
+            const aEsNuevo = nuevosConteosIds.has(a.id);
+            const bEsNuevo = nuevosConteosIds.has(b.id);
+            
+            // Si uno es nuevo y el otro no, el nuevo va primero
+            if (aEsNuevo && !bEsNuevo) return -1;
+            if (!aEsNuevo && bEsNuevo) return 1;
+            
+            // Si ambos son nuevos o ambos no son nuevos, ordenar por número de inventario
+            const numA = ((a.numero_inventario || a.inventario_numero) || '').toUpperCase();
+            const numB = ((b.numero_inventario || b.inventario_numero) || '').toUpperCase();
+            return numA.localeCompare(numB);
+        });
+    }, [conteosCallao, conteosMalvinas, nuevosConteosIds]);
 
     // Obtener paginación activa según el almacén seleccionado
     const paginacionActiva = almacenActivo === 'callao' ? paginationCallao : almacenActivo === 'malvinas' ? paginationMalvinas : null;

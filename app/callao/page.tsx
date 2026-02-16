@@ -112,6 +112,7 @@ export default function CallaoPage() {
                 
                 // Si es la primera carga (set vacío), solo inicializar sin marcar como nuevos
                 const esPrimeraCarga = conteosAnterioresIds.size === 0;
+                let nuevosIds = new Set<number>();
                 
                 if (esPrimeraCarga) {
                     // Primera carga: solo inicializar el set sin animaciones
@@ -120,20 +121,39 @@ export default function CallaoPage() {
                     setConteosAnterioresIds(todosIds);
                 } else {
                     // Cargas posteriores: detectar conteos nuevos
-                    const nuevosIds = new Set<number>();
+                    nuevosIds = new Set<number>();
+                    const nuevosConteos: any[] = [];
+                    
                     allSessions.forEach((s: any) => {
                         if (!conteosAnterioresIds.has(s.id)) {
                             nuevosIds.add(s.id);
+                            nuevosConteos.push(s);
                         }
                     });
                     
-                    // Si hay conteos nuevos, agregarlos al set de nuevos conteos
+                    // Si hay conteos nuevos, agregarlos al set de nuevos conteos y mostrar notificación
                     if (nuevosIds.size > 0) {
                         setNuevosConteosIds(prev => {
                             const nuevoSet = new Set(prev);
                             nuevosIds.forEach(id => nuevoSet.add(id));
                             return nuevoSet;
                         });
+                        
+                        // Mostrar notificación profesional
+                        if (nuevosConteos.length === 1) {
+                            const conteo = nuevosConteos[0];
+                            showAlert(
+                                'Nuevo Conteo Registrado',
+                                `Se registró un conteo de tipo "${conteo.tipo === 'cajas' ? 'Cajas' : 'Stand'}" para el inventario "${conteo.numero}" por ${conteo.registrado}`,
+                                'success'
+                            );
+                        } else {
+                            showAlert(
+                                'Nuevos Conteos Registrados',
+                                `Se registraron ${nuevosConteos.length} nuevos conteos`,
+                                'success'
+                            );
+                        }
                         
                         // Remover la animación después de 3 segundos
                         nuevosIds.forEach(id => {
@@ -155,9 +175,25 @@ export default function CallaoPage() {
                     });
                 }
                 
+                // Ordenar: primero los nuevos, luego por número de inventario
+                const idsNuevosParaOrdenar = nuevosIds;
+                const sesionesOrdenadas = [...allSessions].sort((a, b) => {
+                    const aEsNuevo = idsNuevosParaOrdenar.has(a.id);
+                    const bEsNuevo = idsNuevosParaOrdenar.has(b.id);
+                    
+                    // Si uno es nuevo y el otro no, el nuevo va primero
+                    if (aEsNuevo && !bEsNuevo) return -1;
+                    if (!aEsNuevo && bEsNuevo) return 1;
+                    
+                    // Si ambos son nuevos o ambos no son nuevos, ordenar por número de inventario
+                    const numA = (a.numero || '').toUpperCase();
+                    const numB = (b.numero || '').toUpperCase();
+                    return numA.localeCompare(numB);
+                });
+                
                 setState((prev: any) => ({
                     ...prev,
-                    sesiones: { ...prev.sesiones, callao: allSessions }
+                    sesiones: { ...prev.sesiones, callao: sesionesOrdenadas }
                 }));
             }
         } catch (e) {
