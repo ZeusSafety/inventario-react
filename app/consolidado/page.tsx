@@ -59,6 +59,7 @@ export default function ConsolidadoPage() {
         setFetchError(null);
         
         try {
+            // Timeout normal (60 segundos) - el backend ahora está optimizado
             const data = await apiCall(`obtener_consolidados_completos&inventario_id=${inventoryId}`);
 
             if (data.success) {
@@ -67,7 +68,7 @@ export default function ConsolidadoPage() {
                 
                 console.log('Datos recibidos - Callao:', callaoConsolidado.length, 'Malvinas:', malvinasConsolidado.length);
                 
-                // Ordenar malvinasData según el orden de Callao
+                // Crear mapa de Malvinas una sola vez (optimizado)
                 const malvinasMap = new Map<string, ConsolidadoItem>();
                 malvinasConsolidado.forEach((item: ConsolidadoItem) => {
                     const codigo = String(item.codigo || '').trim().toUpperCase();
@@ -76,46 +77,32 @@ export default function ConsolidadoPage() {
                     }
                 });
                 
-                console.log('Mapa de Malvinas creado:', malvinasMap.size, 'productos');
-                
+                // Ordenar Malvinas según el orden de Callao
                 const sortedMalvinasData: ConsolidadoItem[] = [];
+                const malvinasMapCopy = new Map(malvinasMap); // Copia para no modificar el original
                 
                 // Primero agregar los productos que están en Callao, en el mismo orden
                 callaoConsolidado.forEach((callaoItem: ConsolidadoItem) => {
                     const codigo = String(callaoItem.codigo || '').trim().toUpperCase();
-                    const malvinasItem = malvinasMap.get(codigo);
+                    const malvinasItem = malvinasMapCopy.get(codigo);
                     if (malvinasItem) {
                         sortedMalvinasData.push(malvinasItem);
-                        malvinasMap.delete(codigo);
+                        malvinasMapCopy.delete(codigo);
                     }
                 });
                 
-                console.log('Después de procesar Callao, quedan en mapa:', malvinasMap.size, 'productos');
-                
                 // Luego agregar los productos que solo están en Malvinas (al final)
-                malvinasMap.forEach((item) => {
+                malvinasMapCopy.forEach((item) => {
                     sortedMalvinasData.push(item);
                 });
                 
-                console.log('Total productos Malvinas procesados:', sortedMalvinasData.length);
-                
-                // CONSTRUIR CONTEO GENERAL: Combinar Callao + Malvinas por código
-                // Crear mapa de Malvinas desde los datos originales (no usar malvinasMap porque ya fue modificado)
-                const malvinasMapForGeneral = new Map<string, ConsolidadoItem>();
-                malvinasConsolidado.forEach((item: ConsolidadoItem) => {
-                    const codigo = String(item.codigo || '').trim().toUpperCase();
-                    if (codigo) {
-                        malvinasMapForGeneral.set(codigo, item);
-                    }
-                });
-                
-                // Construir Conteo General según orden de Callao (optimizado)
+                // Construir Conteo General de forma optimizada (usando el mapa original)
                 const sortedGeneralData: ConsolidadoItem[] = [];
                 
                 // Procesar productos de Callao (en su orden)
                 callaoConsolidado.forEach((callaoItem: ConsolidadoItem) => {
                     const codigo = String(callaoItem.codigo || '').trim().toUpperCase();
-                    const malvinasItem = malvinasMapForGeneral.get(codigo);
+                    const malvinasItem = malvinasMap.get(codigo);
                     
                     // Calcular totales
                     const callaoSistema = Number(callaoItem.sistema || 0);
@@ -148,44 +135,46 @@ export default function ConsolidadoPage() {
                         total_fisico: totalFisico,
                         resultado: resultado
                     });
-                    
-                    // Remover de mapa para no duplicar
-                    malvinasMapForGeneral.delete(codigo);
                 });
                 
                 // Agregar productos que solo están en Malvinas
-                malvinasMapForGeneral.forEach((malvinasItem) => {
+                malvinasConsolidado.forEach((malvinasItem: ConsolidadoItem) => {
                     const codigo = String(malvinasItem.codigo || '').trim().toUpperCase();
-                    const malvinasSistema = Number(malvinasItem.sistema || 0);
-                    const malvinasFisico = Number(malvinasItem.fisico || 0);
-                    
-                    const totalSistema = malvinasSistema; // Solo Malvinas
-                    const totalFisico = malvinasFisico; // Solo Malvinas
-                    const diferencia = totalFisico - totalSistema;
-                    
-                    // Determinar resultado
-                    let resultado: 'CONFORME' | 'SOBRANTE' | 'FALTANTE' = 'CONFORME';
-                    if (totalFisico > totalSistema) {
-                        resultado = 'SOBRANTE';
-                    } else if (totalSistema > totalFisico) {
-                        resultado = 'FALTANTE';
+                    // Solo agregar si no está en Callao (no está en sortedGeneralData)
+                    const yaExiste = sortedGeneralData.some(item => item.codigo === codigo);
+                    if (!yaExiste) {
+                        const malvinasSistema = Number(malvinasItem.sistema || 0);
+                        const malvinasFisico = Number(malvinasItem.fisico || 0);
+                        
+                        const totalSistema = malvinasSistema;
+                        const totalFisico = malvinasFisico;
+                        const diferencia = totalFisico - totalSistema;
+                        
+                        // Determinar resultado
+                        let resultado: 'CONFORME' | 'SOBRANTE' | 'FALTANTE' = 'CONFORME';
+                        if (totalFisico > totalSistema) {
+                            resultado = 'SOBRANTE';
+                        } else if (totalSistema > totalFisico) {
+                            resultado = 'FALTANTE';
+                        }
+                        
+                        sortedGeneralData.push({
+                            id: malvinasItem.id || 0,
+                            producto_item: malvinasItem.producto_item || 0,
+                            producto: malvinasItem.producto || '',
+                            codigo: codigo,
+                            sistema: malvinasSistema,
+                            fisico: malvinasFisico,
+                            diferencia: diferencia,
+                            unidad_medida: malvinasItem.unidad_medida || 'UNIDAD',
+                            total_sistema: totalSistema,
+                            total_fisico: totalFisico,
+                            resultado: resultado
+                        });
                     }
-                    
-                    sortedGeneralData.push({
-                        id: malvinasItem.id || 0,
-                        producto_item: malvinasItem.producto_item || 0,
-                        producto: malvinasItem.producto || '',
-                        codigo: codigo,
-                        sistema: malvinasSistema,
-                        fisico: malvinasFisico,
-                        diferencia: diferencia,
-                        unidad_medida: malvinasItem.unidad_medida || 'UNIDAD',
-                        total_sistema: totalSistema,
-                        total_fisico: totalFisico,
-                        resultado: resultado
-                    });
                 });
                 
+                // Actualizar todos los estados de una vez
                 setCallaoData(callaoConsolidado);
                 setMalvinasData(sortedMalvinasData);
                 setGeneralData(sortedGeneralData);
@@ -204,9 +193,18 @@ export default function ConsolidadoPage() {
                     setFetchError(msg);
                 }
             }
-        } catch (error) {
+        } catch (error: any) {
             console.error('Error fetching consolidados:', error);
-            setFetchError('Error de conexión al servidor. Por favor, verifique su conexión e intente nuevamente.');
+            const errorMessage = error?.message || 'Error desconocido';
+            
+            // Distinguir entre timeout y otros errores
+            if (errorMessage.includes('tardando demasiado')) {
+                setFetchError('La carga está tardando más de lo esperado. Por favor, espere un momento y vuelva a intentar. El proceso puede tardar varios minutos con grandes volúmenes de datos.');
+            } else if (errorMessage.includes('Failed to fetch') || errorMessage.includes('504')) {
+                setFetchError('El servidor está procesando los datos. Por favor, espere unos momentos y vuelva a intentar. Este proceso puede tardar varios minutos.');
+            } else {
+                setFetchError(`Error al cargar los consolidados: ${errorMessage}`);
+            }
         } finally {
             setLoading(false);
         }

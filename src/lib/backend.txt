@@ -4599,12 +4599,12 @@ def generar_todos_consolidados(data):
             conn.close()
 
 
-def obtener_consolidado_callao(inventario_id=None):
+def obtener_consolidado_callao(inventario_id=None, forzar_regenerar=False):
     """
     Obtiene el consolidado de inventario para almacén Callao
     
-    REPLICA EXACTAMENTE la lógica de obtener_comparacion_callao para asegurar
-    que aparezcan TODOS los productos que se ven en Comparar (los 209).
+    OPTIMIZADO: Primero intenta leer de la tabla consolidado_inventario_callao.
+    Solo regenera si la tabla está vacía o si forzar_regenerar=True.
     """
     try:
         conn = get_connection()
@@ -4626,6 +4626,99 @@ def obtener_consolidado_callao(inventario_id=None):
             else:
                 return {'success': False, 'message': 'No se especificó inventario y no hay inventario activo', 'consolidado': []}
 
+        # OPTIMIZACIÓN: Primero intentar leer directamente de la tabla
+        if not forzar_regenerar:
+            cursor.execute("""
+                SELECT 
+                    id,
+                    producto_item,
+                    producto,
+                    codigo,
+                    sistema,
+                    fisico,
+                    diferencia,
+                    unidad_medida
+                FROM consolidado_inventario_callao
+                WHERE inventario_id = %s
+                ORDER BY producto
+            """, (inventario_id,))
+            
+            datos_tabla = cursor.fetchall()
+            
+            if datos_tabla and len(datos_tabla) > 0:
+                # Hay datos en la tabla, usarlos directamente
+                consolidado = []
+                total_sistema = 0
+                total_fisico = 0
+                diferencia_total = 0
+                productos_sobrantes = 0
+                productos_faltantes = 0
+                productos_conformes = 0
+                
+                for row in datos_tabla:
+                    sistema = float(row['sistema'] or 0)
+                    fisico = float(row['fisico'] or 0)
+                    diferencia = float(row['diferencia'] or 0)
+                    
+                    total_sistema += sistema
+                    total_fisico += fisico
+                    diferencia_total += diferencia
+                    
+                    if diferencia == 0 and fisico > 0:
+                        productos_conformes += 1
+                    elif diferencia > 0:
+                        productos_sobrantes += 1
+                    elif diferencia < 0:
+                        productos_faltantes += 1
+                    
+                    consolidado.append({
+                        'id': row['id'],
+                        'inventario_id': inventario_id,
+                        'producto_item': row['producto_item'],
+                        'producto': row['producto'],
+                        'codigo': row['codigo'],
+                        'sistema': int(sistema),
+                        'fisico': int(fisico),
+                        'diferencia': int(diferencia),
+                        'unidad_medida': row['unidad_medida'] or 'UND'
+                    })
+                
+                # Resumen
+                resumen = {
+                    'total_productos': len(consolidado),
+                    'total_sistema': int(total_sistema),
+                    'total_fisico': int(total_fisico),
+                    'diferencia_total': int(diferencia_total),
+                    'productos_sobrantes': productos_sobrantes,
+                    'productos_faltantes': productos_faltantes,
+                    'productos_conformes': productos_conformes
+                }
+                
+                # Obtener información del inventario
+                cursor.execute("""
+                    SELECT numero_inventario, area, autorizado_por, fecha_hora_asignacion
+                    FROM inventarios
+                    WHERE id = %s
+                """, (inventario_id,))
+                inventario_info = cursor.fetchone()
+                
+                logging.info(f"obtener_consolidado_callao: Leídos {len(consolidado)} productos desde tabla (optimizado)")
+                
+                return {
+                    'success': True,
+                    'inventario_id': inventario_id,
+                    'inventario': inventario_info,
+                    'almacen': 'Callao',
+                    'consolidado': consolidado,
+                    'resumen': resumen,
+                    'total_registros': len(consolidado),
+                    'registros_guardados': 0,
+                    'registros_actualizados': 0
+                }
+        
+        # Si llegamos aquí, necesitamos regenerar (tabla vacía o forzar_regenerar=True)
+        logging.info(f"obtener_consolidado_callao: Regenerando consolidado para inventario_id={inventario_id}")
+        
         # 1. Obtener ID del almacén Callao
         cursor.execute("SELECT id FROM almacenes WHERE nombre = 'Callao'")
         almacen_callao = cursor.fetchone()
@@ -4797,24 +4890,6 @@ def obtener_consolidado_callao(inventario_id=None):
         
         conn.commit()
         
-        # Actualizar automáticamente consolidado_general después de guardar Callao
-        try:
-            cursor.close()
-            conn.close()
-            obtener_consolidado_general(inventario_id)
-            logging.info(f"obtener_consolidado_callao: Consolidado general actualizado automáticamente después de guardar Callao")
-            # Reabrir conexión para continuar
-            conn = get_connection()
-            cursor = conn.cursor()
-        except Exception as e:
-            logging.error(f"Error al actualizar consolidado_general automáticamente: {str(e)}")
-            # Reabrir conexión si se cerró
-            try:
-                conn = get_connection()
-                cursor = conn.cursor()
-            except:
-                pass
-        
         # Resumen
         resumen = {
             'total_productos': len(consolidado),
@@ -4859,12 +4934,12 @@ def obtener_consolidado_callao(inventario_id=None):
         if 'conn' in locals():
             conn.close()
 
-def obtener_consolidado_malvinas(inventario_id=None):
+def obtener_consolidado_malvinas(inventario_id=None, forzar_regenerar=False):
     """
     Obtiene el consolidado de inventario para almacén Malvinas
     
-    REPLICA EXACTAMENTE la lógica de obtener_comparacion_malvinas para asegurar
-    que aparezcan TODOS los productos que se ven en Comparar.
+    OPTIMIZADO: Primero intenta leer de la tabla consolidado_inventario_malvinas.
+    Solo regenera si la tabla está vacía o si forzar_regenerar=True.
     """
     try:
         conn = get_connection()
@@ -4886,6 +4961,99 @@ def obtener_consolidado_malvinas(inventario_id=None):
             else:
                 return {'success': False, 'message': 'No se especificó inventario y no hay inventario activo', 'consolidado': []}
 
+        # OPTIMIZACIÓN: Primero intentar leer directamente de la tabla
+        if not forzar_regenerar:
+            cursor.execute("""
+                SELECT 
+                    id,
+                    producto_item,
+                    producto,
+                    codigo,
+                    sistema,
+                    fisico,
+                    diferencia,
+                    unidad_medida
+                FROM consolidado_inventario_malvinas
+                WHERE inventario_id = %s
+                ORDER BY producto
+            """, (inventario_id,))
+            
+            datos_tabla = cursor.fetchall()
+            
+            if datos_tabla and len(datos_tabla) > 0:
+                # Hay datos en la tabla, usarlos directamente
+                consolidado = []
+                total_sistema = 0
+                total_fisico = 0
+                diferencia_total = 0
+                productos_sobrantes = 0
+                productos_faltantes = 0
+                productos_conformes = 0
+                
+                for row in datos_tabla:
+                    sistema = float(row['sistema'] or 0)
+                    fisico = float(row['fisico'] or 0)
+                    diferencia = float(row['diferencia'] or 0)
+                    
+                    total_sistema += sistema
+                    total_fisico += fisico
+                    diferencia_total += diferencia
+                    
+                    if diferencia == 0 and fisico > 0:
+                        productos_conformes += 1
+                    elif diferencia > 0:
+                        productos_sobrantes += 1
+                    elif diferencia < 0:
+                        productos_faltantes += 1
+                    
+                    consolidado.append({
+                        'id': row['id'],
+                        'inventario_id': inventario_id,
+                        'producto_item': row['producto_item'],
+                        'producto': row['producto'],
+                        'codigo': row['codigo'],
+                        'sistema': int(sistema),
+                        'fisico': int(fisico),
+                        'diferencia': int(diferencia),
+                        'unidad_medida': row['unidad_medida'] or 'UND'
+                    })
+                
+                # Resumen
+                resumen = {
+                    'total_productos': len(consolidado),
+                    'total_sistema': int(total_sistema),
+                    'total_fisico': int(total_fisico),
+                    'diferencia_total': int(diferencia_total),
+                    'productos_sobrantes': productos_sobrantes,
+                    'productos_faltantes': productos_faltantes,
+                    'productos_conformes': productos_conformes
+                }
+                
+                # Obtener información del inventario
+                cursor.execute("""
+                    SELECT numero_inventario, area, autorizado_por, fecha_hora_asignacion
+                    FROM inventarios
+                    WHERE id = %s
+                """, (inventario_id,))
+                inventario_info = cursor.fetchone()
+                
+                logging.info(f"obtener_consolidado_malvinas: Leídos {len(consolidado)} productos desde tabla (optimizado)")
+                
+                return {
+                    'success': True,
+                    'inventario_id': inventario_id,
+                    'inventario': inventario_info,
+                    'almacen': 'Malvinas',
+                    'consolidado': consolidado,
+                    'resumen': resumen,
+                    'total_registros': len(consolidado),
+                    'registros_guardados': 0,
+                    'registros_actualizados': 0
+                }
+        
+        # Si llegamos aquí, necesitamos regenerar (tabla vacía o forzar_regenerar=True)
+        logging.info(f"obtener_consolidado_malvinas: Regenerando consolidado para inventario_id={inventario_id}")
+        
         # 1. Obtener ID del almacén Malvinas
         cursor.execute("SELECT id FROM almacenes WHERE nombre = 'Malvinas'")
         almacen_malvinas = cursor.fetchone()
