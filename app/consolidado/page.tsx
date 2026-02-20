@@ -65,6 +65,8 @@ export default function ConsolidadoPage() {
                 const callaoConsolidado = data.callao?.consolidado || [];
                 const malvinasConsolidado = data.malvinas?.consolidado || [];
                 
+                console.log('Datos recibidos - Callao:', callaoConsolidado.length, 'Malvinas:', malvinasConsolidado.length);
+                
                 // Ordenar malvinasData según el orden de Callao
                 const malvinasMap = new Map<string, ConsolidadoItem>();
                 malvinasConsolidado.forEach((item: ConsolidadoItem) => {
@@ -73,6 +75,8 @@ export default function ConsolidadoPage() {
                         malvinasMap.set(codigo, item);
                     }
                 });
+                
+                console.log('Mapa de Malvinas creado:', malvinasMap.size, 'productos');
                 
                 const sortedMalvinasData: ConsolidadoItem[] = [];
                 
@@ -86,10 +90,14 @@ export default function ConsolidadoPage() {
                     }
                 });
                 
+                console.log('Después de procesar Callao, quedan en mapa:', malvinasMap.size, 'productos');
+                
                 // Luego agregar los productos que solo están en Malvinas (al final)
                 malvinasMap.forEach((item) => {
                     sortedMalvinasData.push(item);
                 });
+                
+                console.log('Total productos Malvinas procesados:', sortedMalvinasData.length);
                 
                 // CONSTRUIR CONTEO GENERAL: Combinar Callao + Malvinas por código
                 // Crear mapa de Malvinas desde los datos originales (no usar malvinasMap porque ya fue modificado)
