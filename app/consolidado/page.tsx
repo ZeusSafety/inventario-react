@@ -58,21 +58,8 @@ export default function ConsolidadoPage() {
         setLoading(true);
         setFetchError(null);
         
-        // Timeout para evitar que se quede cargando indefinidamente
-        let timeoutId: NodeJS.Timeout | null = null;
-        timeoutId = setTimeout(() => {
-            setFetchError('La carga está tardando demasiado. Por favor, intente nuevamente o genere los consolidados primero.');
-            setLoading(false);
-        }, 30000); // 30 segundos timeout
-        
         try {
-            console.log('Iniciando carga de consolidados para inventario:', inventoryId);
-            const startTime = Date.now();
             const data = await apiCall(`obtener_consolidados_completos&inventario_id=${inventoryId}`);
-            const loadTime = Date.now() - startTime;
-            console.log(`Consolidados cargados en ${loadTime}ms`);
-            
-            if (timeoutId) clearTimeout(timeoutId);
 
             if (data.success) {
                 const callaoConsolidado = data.callao?.consolidado || [];
@@ -211,7 +198,6 @@ export default function ConsolidadoPage() {
             }
         } catch (error) {
             console.error('Error fetching consolidados:', error);
-            if (timeoutId) clearTimeout(timeoutId);
             setFetchError('Error de conexión al servidor. Por favor, verifique su conexión e intente nuevamente.');
         } finally {
             setLoading(false);
