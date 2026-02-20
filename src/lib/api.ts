@@ -1,17 +1,12 @@
 export const API_BASE_URL = 'https://api-inventario-logistica-2946605267.us-central1.run.app';
 
-export async function apiCall(action: string, method: string = 'GET', data: unknown = null, timeout: number = 60000) {
+export async function apiCall(action: string, method: string = 'GET', data: unknown = null) {
   try {
     const url = `${API_BASE_URL}/?action=${action}`;
 
-    // Crear AbortController para timeout compatible con todos los navegadores
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
-
     const options: RequestInit = {
       method: method,
-      headers: {},
-      signal: controller.signal
+      headers: {}
     };
 
     if (method !== 'GET' && data) {
@@ -22,27 +17,17 @@ export async function apiCall(action: string, method: string = 'GET', data: unkn
       options.body = JSON.stringify(data);
     }
 
-    try {
-      const response = await fetch(url, options);
-      clearTimeout(timeoutId);
-      const result = await response.json().catch(() => ({}));
+    const response = await fetch(url, options);
+    const result = await response.json().catch(() => ({}));
 
-      if (!response.ok) {
-        return {
-          success: false,
-          message: result.message || result.error || `Error del servidor: ${response.status}`
-        };
-      }
-
-      return result;
-    } catch (fetchError: any) {
-      clearTimeout(timeoutId);
-      // Si fue abortado, es un timeout
-      if (fetchError.name === 'AbortError' || controller.signal.aborted) {
-        throw new Error('La operación está tardando demasiado. Por favor, espere un momento y vuelva a intentar.');
-      }
-      throw fetchError;
+    if (!response.ok) {
+      return {
+        success: false,
+        message: result.message || result.error || `Error del servidor: ${response.status}`
+      };
     }
+
+    return result;
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Error en API ${action}:`, error);

@@ -211,18 +211,19 @@ export default function ConsolidadoPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [inventoryId]);
 
+    // Cargar solo una vez cuando cambia el inventario - SIN recargas automáticas
     useEffect(() => {
         if (inventoryId && !hasFetchedRef.current) {
             hasFetchedRef.current = true;
-            // Pequeño delay para evitar múltiples llamadas simultáneas
-            const timeoutId = setTimeout(() => {
-                fetchConsolidados();
-            }, 100);
-            return () => clearTimeout(timeoutId);
+            fetchConsolidados();
         }
-    }, [inventoryId, fetchConsolidados]);
+        // Resetear flag si cambia el inventario
+        if (!inventoryId) {
+            hasFetchedRef.current = false;
+        }
+    }, [inventoryId]); // Solo depende de inventoryId, no de fetchConsolidados para evitar recargas
 
-    // Escuchar evento de proforma registrada para recargar datos
+    // Escuchar eventos de actualización para recargar datos solo cuando sea necesario
     useEffect(() => {
         const handleProformaRegistrada = (event: Event) => {
             const customEvent = event as CustomEvent;
@@ -235,13 +236,32 @@ export default function ConsolidadoPage() {
                 // Pequeño delay para dar tiempo al backend de procesar
                 setTimeout(() => {
                     fetchConsolidados();
-                }, 300);
+                }, 500);
+            }
+        };
+
+        // Escuchar evento cuando se actualiza Comparar
+        const handleCompararActualizado = (event: Event) => {
+            const customEvent = event as CustomEvent;
+            const { inventario_id } = customEvent.detail || {};
+            
+            // Solo recargar si es el mismo inventario
+            if (inventoryId && inventario_id === inventoryId) {
+                // Resetear flag para forzar recarga
+                hasFetchedRef.current = false;
+                // Delay para dar tiempo al backend de procesar
+                setTimeout(() => {
+                    fetchConsolidados();
+                }, 500);
             }
         };
 
         window.addEventListener('proformaRegistrada', handleProformaRegistrada);
+        window.addEventListener('compararActualizado', handleCompararActualizado);
+        
         return () => {
             window.removeEventListener('proformaRegistrada', handleProformaRegistrada);
+            window.removeEventListener('compararActualizado', handleCompararActualizado);
         };
     }, [fetchConsolidados, inventoryId]);
 

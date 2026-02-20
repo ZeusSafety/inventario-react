@@ -1014,7 +1014,7 @@ def actualizar_cantidad_producto_individual(data):
 def actualizar_masivo_productos(data):
     """
     Actualización masiva de cantidad y/o unidad de medida de productos
-    Permite actualizar uno o ambos campos manteniendo el otro sin cambios
+    OPTIMIZADO: Reduce consultas a la base de datos usando batch updates
     """
     try:
         conn = get_connection()
@@ -1024,94 +1024,104 @@ def actualizar_masivo_productos(data):
         productos = data['productos']  # Lista de productos a actualizar
         usuario = data['usuario']
         
-        registros_actualizados = 0
+        if not productos or len(productos) == 0:
+            return {
+                'success': True,
+                'message': 'No hay productos para actualizar',
+                'registros_actualizados': 0
+            }
         
+        # OPTIMIZACIÓN: Obtener todos los datos actuales en una sola consulta
+        detalle_ids = [p['detalle_id'] for p in productos if p.get('detalle_id')]
+        if not detalle_ids:
+            return {
+                'success': False,
+                'message': 'No se proporcionaron IDs de detalle válidos'
+            }
+        
+        # Obtener todos los productos actuales en batch
+        placeholders = ','.join(['%s'] * len(detalle_ids))
+        cursor.execute(f"""
+            SELECT id, cantidad, unidad_medida 
+            FROM detalle_conteo 
+            WHERE id IN ({placeholders}) AND conteo_id = %s
+        """, detalle_ids + [conteo_id])
+        
+        productos_actuales = {row['id']: row for row in cursor.fetchall()}
+        
+        registros_actualizados = 0
+        auditorias = []  # Acumular auditorías para insertar en batch
+        
+        # Procesar actualizaciones
         for producto in productos:
             detalle_id = producto['detalle_id']
             
-            # Obtener datos actuales del producto
-            cursor.execute("""
-                SELECT cantidad, unidad_medida 
-                FROM detalle_conteo 
-                WHERE id = %s AND conteo_id = %s
-            """, (detalle_id, conteo_id))
+            if detalle_id not in productos_actuales:
+                continue
             
-            producto_actual = cursor.fetchone()
+            producto_actual = productos_actuales[detalle_id]
             
-            if producto_actual:
-                # Determinar qué campos actualizar
-                nueva_cantidad_raw = producto.get('nueva_cantidad', producto_actual['cantidad'])
-                nueva_unidad = producto.get('nueva_unidad_medida', producto_actual['unidad_medida'])
-                
-                # Convertir cantidad a int (manejar string, float, None)
-                try:
-                    if nueva_cantidad_raw is None:
-                        nueva_cantidad = producto_actual['cantidad']
-                    elif isinstance(nueva_cantidad_raw, str):
-                        nueva_cantidad = int(float(nueva_cantidad_raw.strip()))
-                    else:
-                        nueva_cantidad = int(float(nueva_cantidad_raw))
-                except (ValueError, TypeError) as e:
-                    logging.error(f"[actualizar_masivo_productos] Error al convertir cantidad para detalle_id={detalle_id}: {nueva_cantidad_raw}, error: {str(e)}")
-                    nueva_cantidad = producto_actual['cantidad']  # Mantener valor actual si hay error
-                
-                # Log para debugging
-                logging.info(f"[actualizar_masivo_productos] Actualizando detalle_id={detalle_id}, cantidad_anterior={producto_actual['cantidad']}, cantidad_nueva={nueva_cantidad}")
-                
-                # Actualizar producto
-                cursor.execute("""
-                    UPDATE detalle_conteo 
-                    SET cantidad = %s, 
-                        unidad_medida = %s,
-                        usuario_modificacion = %s,
-                        fecha_hora_modificacion = CURRENT_TIMESTAMP
-                    WHERE id = %s AND conteo_id = %s
-                """, (nueva_cantidad, nueva_unidad, usuario, detalle_id, conteo_id))
-                
-                # Verificar que se actualizó correctamente
-                cursor.execute("SELECT cantidad FROM detalle_conteo WHERE id = %s", (detalle_id,))
-                detalle_verificado = cursor.fetchone()
-                if detalle_verificado:
-                    logging.info(f"[actualizar_masivo_productos] ✓ Cantidad verificada después de UPDATE: {detalle_verificado['cantidad']}")
+            # Determinar qué campos actualizar
+            nueva_cantidad_raw = producto.get('nueva_cantidad', producto_actual['cantidad'])
+            nueva_unidad = producto.get('nueva_unidad_medida', producto_actual['unidad_medida'])
+            
+            # Convertir cantidad a int (manejar string, float, None)
+            try:
+                if nueva_cantidad_raw is None:
+                    nueva_cantidad = producto_actual['cantidad']
+                elif isinstance(nueva_cantidad_raw, str):
+                    nueva_cantidad = int(float(nueva_cantidad_raw.strip()))
                 else:
-                    logging.warning(f"[actualizar_masivo_productos] ⚠️ No se pudo verificar detalle_id={detalle_id} después de UPDATE")
+                    nueva_cantidad = int(float(nueva_cantidad_raw))
+            except (ValueError, TypeError) as e:
+                logging.error(f"[actualizar_masivo_productos] Error al convertir cantidad para detalle_id={detalle_id}: {nueva_cantidad_raw}, error: {str(e)}")
+                nueva_cantidad = producto_actual['cantidad']  # Mantener valor actual si hay error
+            
+            # Actualizar producto
+            cursor.execute("""
+                UPDATE detalle_conteo 
+                SET cantidad = %s, 
+                    unidad_medida = %s,
+                    usuario_modificacion = %s,
+                    fecha_hora_modificacion = CURRENT_TIMESTAMP
+                WHERE id = %s AND conteo_id = %s
+            """, (nueva_cantidad, nueva_unidad, usuario, detalle_id, conteo_id))
+            
+            if cursor.rowcount > 0:
+                registros_actualizados += 1
                 
-                if cursor.rowcount > 0:
-                    registros_actualizados += 1
-                    
-                    # Registrar auditoría para cantidad si cambió
-                    if str(nueva_cantidad) != str(producto_actual['cantidad']):
-                        cursor.execute("""
-                            INSERT INTO auditoria_cambios (
-                                detalle_conteo_id, conteo_id, campo_modificado,
-                                valor_anterior, valor_nuevo, tipo_modificacion, usuario
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        """, (
-                            detalle_id, conteo_id, 'cantidad',
-                            str(producto_actual['cantidad']), str(nueva_cantidad),
-                            'masiva', usuario
-                        ))
-                    
-                    # Registrar auditoría para unidad si cambió
-                    if nueva_unidad != producto_actual['unidad_medida']:
-                        cursor.execute("""
-                            INSERT INTO auditoria_cambios (
-                                detalle_conteo_id, conteo_id, campo_modificado,
-                                valor_anterior, valor_nuevo, tipo_modificacion, usuario
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        """, (
-                            detalle_id, conteo_id, 'unidad_medida',
-                            producto_actual['unidad_medida'], nueva_unidad,
-                            'masiva', usuario
-                        ))
+                # Acumular auditorías para insertar en batch
+                if str(nueva_cantidad) != str(producto_actual['cantidad']):
+                    auditorias.append((
+                        detalle_id, conteo_id, 'cantidad',
+                        str(producto_actual['cantidad']), str(nueva_cantidad),
+                        'masiva', usuario
+                    ))
+                
+                if nueva_unidad != producto_actual['unidad_medida']:
+                    auditorias.append((
+                        detalle_id, conteo_id, 'unidad_medida',
+                        producto_actual['unidad_medida'], nueva_unidad,
+                        'masiva', usuario
+                    ))
         
-        # CRÍTICO: Hacer commit explícito y verificar que se ejecutó
+        # OPTIMIZACIÓN: Insertar todas las auditorías en batch
+        if auditorias:
+            cursor.executemany("""
+                INSERT INTO auditoria_cambios (
+                    detalle_conteo_id, conteo_id, campo_modificado,
+                    valor_anterior, valor_nuevo, tipo_modificacion, usuario
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, auditorias)
+        
+        # CRÍTICO: Hacer commit explícito
         try:
             conn.commit()
-            logging.info(f"[actualizar_masivo_productos] ✓ COMMIT realizado exitosamente para {registros_actualizados} registros")
+            logging.info(f"[actualizar_masivo_productos] ✓ COMMIT realizado exitosamente para {registros_actualizados} registros, {len(auditorias)} auditorías")
         except Exception as commit_error:
             logging.error(f"[actualizar_masivo_productos] ❌ ERROR en COMMIT: {str(commit_error)}")
             conn.rollback()
+            raise
             raise commit_error
         
         # Verificación adicional: Contar cuántos registros tienen cantidad > 0 después del commit
@@ -1777,66 +1787,48 @@ def listar_conteos_malvinas(inventario_id):
             'tiendas': {}
         }
         
-        # Para cada tienda, obtener conteos por cajas y por stand
+        # OPTIMIZACIÓN: Obtener todos los conteos de una vez en lugar de por tienda
+        # Primero obtener todos los conteos con sus estadísticas
+        cursor.execute("""
+            SELECT 
+                c.id,
+                c.numero_inventario,
+                c.registrado_por,
+                c.tipo_conteo,
+                DATE_FORMAT(c.fecha_hora_inicio, '%%Y-%%m-%%d %%H:%%i:%%s') as fecha_hora_inicio,
+                DATE_FORMAT(c.fecha_hora_final, '%%Y-%%m-%%d %%H:%%i:%%s') as fecha_hora_final,
+                c.archivo_pdf,
+                c.estado,
+                c.origen_datos,
+                c.tienda_id,
+                t.nombre_tienda,
+                (SELECT COUNT(*) FROM detalle_conteo WHERE conteo_id = c.id) as total_productos,
+                (SELECT COALESCE(SUM(cantidad), 0) FROM detalle_conteo WHERE conteo_id = c.id) as cantidad_total
+            FROM conteos c
+            LEFT JOIN tiendas t ON c.tienda_id = t.id
+            WHERE c.inventario_id = %s 
+                AND c.almacen_id = %s
+            ORDER BY c.tienda_id, c.tipo_conteo, c.fecha_hora_inicio DESC
+        """, (inventario_id, almacen_id))
+        
+        todos_conteos = cursor.fetchall()
+        
+        # Agrupar por tienda y tipo
         for tienda in tiendas:
             tienda_id = tienda['id']
             nombre_tienda = tienda['nombre_tienda']
             
-            # Conteos por cajas para esta tienda
-            cursor.execute("""
-                SELECT 
-                    c.id,
-                    c.numero_inventario,
-                    c.registrado_por,
-                    c.tipo_conteo,
-                    DATE_FORMAT(c.fecha_hora_inicio, '%%Y-%%m-%%d %%H:%%i:%%s') as fecha_hora_inicio,
-                    DATE_FORMAT(c.fecha_hora_final, '%%Y-%%m-%%d %%H:%%i:%%s') as fecha_hora_final,
-                    c.archivo_pdf,
-                    c.estado,
-                    c.origen_datos,
-                    t.nombre_tienda,
-                    COUNT(DISTINCT dc.id) as total_productos,
-                    SUM(dc.cantidad) as cantidad_total
-                FROM conteos c
-                LEFT JOIN detalle_conteo dc ON c.id = dc.conteo_id
-                LEFT JOIN tiendas t ON c.tienda_id = t.id
-                WHERE c.inventario_id = %s 
-                    AND c.almacen_id = %s 
-                    AND c.tienda_id = %s
-                    AND c.tipo_conteo = 'por_cajas'
-                GROUP BY c.id
-                ORDER BY c.fecha_hora_inicio DESC
-            """, (inventario_id, almacen_id, tienda_id))
+            # Filtrar conteos por cajas para esta tienda
+            conteos_cajas = [
+                c for c in todos_conteos 
+                if c['tienda_id'] == tienda_id and c['tipo_conteo'] == 'por_cajas'
+            ]
             
-            conteos_cajas = cursor.fetchall()
-            
-            # Conteos por stand para esta tienda
-            cursor.execute("""
-                SELECT 
-                    c.id,
-                    c.numero_inventario,
-                    c.registrado_por,
-                    c.tipo_conteo,
-                    DATE_FORMAT(c.fecha_hora_inicio, '%%Y-%%m-%%d %%H:%%i:%%s') as fecha_hora_inicio,
-                    DATE_FORMAT(c.fecha_hora_final, '%%Y-%%m-%%d %%H:%%i:%%s') as fecha_hora_final,
-                    c.archivo_pdf,
-                    c.estado,
-                    c.origen_datos,
-                    t.nombre_tienda,
-                    COUNT(DISTINCT dc.id) as total_productos,
-                    SUM(dc.cantidad) as cantidad_total
-                FROM conteos c
-                LEFT JOIN detalle_conteo dc ON c.id = dc.conteo_id
-                LEFT JOIN tiendas t ON c.tienda_id = t.id
-                WHERE c.inventario_id = %s 
-                    AND c.almacen_id = %s 
-                    AND c.tienda_id = %s
-                    AND c.tipo_conteo = 'por_stand'
-                GROUP BY c.id
-                ORDER BY c.fecha_hora_inicio DESC
-            """, (inventario_id, almacen_id, tienda_id))
-            
-            conteos_stand = cursor.fetchall()
+            # Filtrar conteos por stand para esta tienda
+            conteos_stand = [
+                c for c in todos_conteos 
+                if c['tienda_id'] == tienda_id and c['tipo_conteo'] == 'por_stand'
+            ]
             
             # Agregar al resultado
             resultado['tiendas'][nombre_tienda] = {

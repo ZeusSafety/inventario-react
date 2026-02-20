@@ -201,6 +201,14 @@ export default function CompararPage() {
                 setComparacionData(response.comparaciones || []);
                 if (response.resumen) setResumen(response.resumen);
                 setSistemaCargado(true);
+                
+                // Disparar evento para que Consolidado se actualice
+                window.dispatchEvent(new CustomEvent('compararActualizado', {
+                    detail: {
+                        almacen: almacen,
+                        inventario_id: state.sesionActual.inventario_id
+                    }
+                }));
             } else {
                 showAlert('Error', response.message || 'Error al obtener datos', 'error');
             }
@@ -417,7 +425,7 @@ export default function CompararPage() {
             if (response.success) {
                 showAlert('Éxito', 'Cantidad actualizada correctamente', 'success');
                 setActiveModal(null);
-                fetchComparison(selectedAlmacen);
+                fetchComparison(selectedAlmacen); // Esto ya dispara el evento compararActualizado
                 fetchHistory();
             } else {
                 showAlert('Error', response.message, 'error');

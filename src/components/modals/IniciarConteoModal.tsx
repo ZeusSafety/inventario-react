@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Modal from '../Modal';
 import { useInventory, fmt12 } from '@/context/InventoryContext';
 import { ClipboardCheck, Save, Store } from 'lucide-react';
@@ -149,38 +149,53 @@ export default function IniciarConteoModal({ isOpen, onClose, almacen, tipo, onC
                     </div>
                 )}
 
-                {almacen === 'Malvinas' && (
-                    <div className="pt-4 border-t border-gray-100 animate-in slide-in-from-bottom-2 duration-500">
-                        <label className="block text-xs font-bold text-gray-700 uppercase mb-4 tracking-wider">
-                            Seleccionar Tienda:
-                        </label>
-                        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                            {TIENDAS_MAP.map(({ id, t }) => {
-                                const isSelected = formData.tienda === t;
+                {almacen === 'Malvinas' && (() => {
+                    // OPTIMIZACIÓN: Pre-calcular estados de todas las tiendas una sola vez
+                    const tiendasEstados = useMemo(() => {
+                        const estados: Record<string, { isCompleted: boolean; isInProgress: boolean; isDisabled: boolean }> = {};
+                        
+                        TIENDAS_MAP.forEach(({ t }) => {
+                            // 1. Verificar si la tienda ya fue registrada (En historial o en sesión activa) PARA ESTE TIPO
+                            const isCompletedHistorial = state.sesiones.malvinas?.some((s: any) =>
+                                s.numero === state.sesionActual.numero &&
+                                s.tienda === t &&
+                                s.tipo === tipo
+                            );
 
-                                // 1. Verificar si la tienda ya fue registrada (En historial o en sesión activa) PARA ESTE TIPO
-                                const isCompletedHistorial = state.sesiones.malvinas?.some((s: any) =>
-                                    s.numero === state.sesionActual.numero &&
-                                    s.tienda === t &&
-                                    s.tipo === tipo
-                                );
+                            const isCompletedActivo = tipo === 'cajas'
+                                ? activeCounts?.[t]?.conteos_por_cajas?.some((c: any) => c.estado === 'finalizado')
+                                : activeCounts?.[t]?.conteos_por_stand?.some((c: any) => c.estado === 'finalizado');
 
-                                const isCompletedActivo = tipo === 'cajas'
-                                    ? activeCounts?.[t]?.conteos_por_cajas?.some((c: any) => c.estado === 'finalizado')
-                                    : activeCounts?.[t]?.conteos_por_stand?.some((c: any) => c.estado === 'finalizado');
+                            // Ahora el estado es independiente: Si contaste cajas, stand sigue disponible.
+                            const isCompleted = isCompletedHistorial || isCompletedActivo;
 
-                                // Ahora el estado es independiente: Si contaste cajas, stand sigue disponible.
-                                const isCompleted = isCompletedHistorial || isCompletedActivo;
+                            // 2. Verificar si está en proceso por alguien más (Polling)
+                            const isInProgress = state.conteosEnProceso?.some((c: any) =>
+                                c.tienda_nombre === t &&
+                                c.almacen_nombre === 'Malvinas' &&
+                                c.tipo_conteo === (tipo === 'cajas' ? 'por_cajas' : 'por_stand') &&
+                                c.estado === 'en_proceso'
+                            );
 
-                                // 2. Verificar si está en proceso por alguien más (Polling)
-                                const isInProgress = state.conteosEnProceso?.some((c: any) =>
-                                    c.tienda_nombre === t &&
-                                    c.almacen_nombre === 'Malvinas' &&
-                                    c.tipo_conteo === (tipo === 'cajas' ? 'por_cajas' : 'por_stand') &&
-                                    c.estado === 'en_proceso'
-                                );
+                            estados[t] = {
+                                isCompleted,
+                                isInProgress,
+                                isDisabled: isCompleted || isInProgress
+                            };
+                        });
+                        
+                        return estados;
+                    }, [state.sesiones.malvinas, state.sesionActual.numero, tipo, activeCounts, state.conteosEnProceso]);
 
-                                const isDisabled = isCompleted || isInProgress;
+                    return (
+                        <div className="pt-4 border-t border-gray-100 animate-in slide-in-from-bottom-2 duration-500">
+                            <label className="block text-xs font-bold text-gray-700 uppercase mb-4 tracking-wider">
+                                Seleccionar Tienda:
+                            </label>
+                            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                                {TIENDAS_MAP.map(({ id, t }) => {
+                                    const isSelected = formData.tienda === t;
+                                    const { isCompleted, isInProgress, isDisabled } = tiendasEstados[t] || { isCompleted: false, isInProgress: false, isDisabled: false };
 
                                 // Definir estilos por tienda
                                 const styles: any = {
@@ -196,7 +211,11 @@ export default function IniciarConteoModal({ isOpen, onClose, almacen, tipo, onC
                                 return (
                                     <div
                                         key={t}
-                                        onClick={() => !isDisabled && setFormData({ ...formData, tienda: t, tienda_id: id })}
+                                        onClick={() => {
+                                            if (!isDisabled) {
+                                                setFormData(prev => ({ ...prev, tienda: t, tienda_id: id }));
+                                            }
+                                        }}
                                         className={`
                                             relative overflow-hidden group
                                             flex flex-col items-center justify-center p-4 text-center
@@ -239,9 +258,9 @@ export default function IniciarConteoModal({ isOpen, onClose, almacen, tipo, onC
                                 );
                             })}
                         </div>
-
                     </div>
-                )}
+                    );
+                })()}
             </div>
         </Modal>
     );
