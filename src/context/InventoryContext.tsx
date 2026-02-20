@@ -57,6 +57,8 @@ export interface Proforma {
     almacen: string;
     num: string;
     estado?: string;
+    archivo_pdf?: string | null;
+    total_productos?: number;
     filas?: any[];
 }
 
@@ -129,13 +131,13 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const [state, setState] = useState<AppState>(initialState);
     const [notification, setNotification] = useState<FeedbackState | null>(null);
 
-    const showAlert = (title: string, message: string, type: 'success' | 'warning' | 'error' = 'success') => {
+    const showAlert = useCallback((title: string, message: string, type: 'success' | 'warning' | 'error' = 'success') => {
         setNotification({ title, message, type });
-    };
+    }, []);
 
-    const showConfirm = (title: string, message: string, onConfirm: () => void) => {
+    const showConfirm = useCallback((title: string, message: string, onConfirm: () => void) => {
         setNotification({ title, message, type: 'confirm', onConfirm });
-    };
+    }, []);
 
     const hideFeedback = () => setNotification(null);
 
@@ -366,15 +368,42 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     const loadProformas = useCallback(async () => {
         try {
-            const response = await apiCall('obtener_proformas', 'GET');
-            if (response.success && response.proformas) {
+            const response = await apiCall('listar_proformas', 'GET');
+            console.log('Respuesta de listar_proformas:', response);
+            if (response.success) {
+                // Mapear los datos del backend al formato esperado
+                const proformas = response.proformas || [];
+                const proformasMapeadas = proformas.map((pf: any) => ({
+                    id: pf.id,
+                    fecha: pf.fecha_formateada || pf.fecha_hora_registro || '',
+                    asesor: pf.asesor || '',
+                    registrado: pf.registrado_por || '',
+                    almacen: pf.almacen || '',
+                    num: pf.numero_proforma || '',
+                    estado: pf.estado || '',
+                    archivo_pdf: pf.archivo_pdf || null,
+                    total_productos: pf.total_productos || 0
+                }));
+                console.log('Proformas mapeadas:', proformasMapeadas);
                 setState((prev: AppState) => ({
                     ...prev,
-                    proformas: response.proformas
+                    proformas: proformasMapeadas
+                }));
+            } else {
+                console.error('Error en listar_proformas:', response.message);
+                // Limpiar proformas si hay error
+                setState((prev: AppState) => ({
+                    ...prev,
+                    proformas: []
                 }));
             }
         } catch (e) {
             console.error("Error loading proformas:", e);
+            // Limpiar proformas si hay error
+            setState((prev: AppState) => ({
+                ...prev,
+                proformas: []
+            }));
         }
     }, []);
 

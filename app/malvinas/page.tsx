@@ -456,6 +456,8 @@ export default function MalvinasPage() {
         const file = e.target.files?.[0];
         if (!file || !currentConteo) return;
 
+        // Procesar archivo sin mostrar alerta (el procesamiento es rápido)
+
         const reader = new FileReader();
         reader.onload = (evt) => {
             try {
@@ -465,25 +467,36 @@ export default function MalvinasPage() {
                 const ws = wb.Sheets[wsname];
                 const data = XLSX.utils.sheet_to_json(ws);
 
+                // OPTIMIZACIÓN: Crear mapa del Excel por código (O(n)) en lugar de buscar en cada iteración
+                const excelMap = new Map<string, any>();
+                
+                // Encontrar las columnas una sola vez
+                if (data.length > 0) {
+                    const firstRow = data[0] as Record<string, any>;
+                    const keys = Object.keys(firstRow);
+                    const codigoKey = keys.find(k => k.toLowerCase().includes('codigo') || k.toLowerCase().includes('código'));
+                    const cantKey = keys.find(k => k.toLowerCase().includes('cantidad') || k.toLowerCase().includes('cant') || k.toLowerCase().includes('conteo'));
+                    
+                    if (codigoKey && cantKey) {
+                        // Crear mapa: código -> cantidad
+                        data.forEach((row: any) => {
+                            const codigo = String(row[codigoKey] || '').trim().toUpperCase();
+                            if (codigo) {
+                                excelMap.set(codigo, row[cantKey]);
+                            }
+                        });
+                    }
+                }
+
+                // Actualizar filas usando el mapa (O(n) en lugar de O(n²))
                 let updatedCount = 0;
                 const newFilas = currentConteo.filas.map((fila: any) => {
-                    // Buscar en el excel una fila que coincida con el código
-                    // Normalizamos las claves del excel a minúsculas para buscar 'codigo'
-                    const match = data.find((row: any) => {
-                        const keys = Object.keys(row);
-                        const codigoKey = keys.find(k => k.toLowerCase().includes('codigo') || k.toLowerCase().includes('código'));
-                        if (!codigoKey) return false;
-                        return String(row[codigoKey]).trim() === String(fila.codigo).trim();
-                    });
-
-                    if (match) {
-                        const keys = Object.keys(match);
-                        const cantKey = keys.find(k => k.toLowerCase().includes('cantidad') || k.toLowerCase().includes('cant') || k.toLowerCase().includes('conteo'));
-                        if (cantKey) {
-                            updatedCount++;
-                            const val = (match as any)[cantKey];
-                            return { ...fila, cantidad_conteo: val !== undefined && val !== null ? String(val) : '' };
-                        }
+                    const codigoNormalizado = String(fila.codigo || '').trim().toUpperCase();
+                    const cantidadExcel = excelMap.get(codigoNormalizado);
+                    
+                    if (cantidadExcel !== undefined && cantidadExcel !== null) {
+                        updatedCount++;
+                        return { ...fila, cantidad_conteo: String(cantidadExcel) };
                     }
                     return fila;
                 });

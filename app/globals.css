@@ -144,6 +144,19 @@ div.rounded-full,
   }
 }
 
+@keyframes spin-slow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin-slow {
+  animation: spin-slow 8s linear infinite;
+}
+
 .animate-pulse-new {
   animation: pulse-new 0.8s ease-in-out 2;
   border-left: 4px solid #0B3B8C !important;

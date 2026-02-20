@@ -1,101 +1,557 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useInventory } from '@/context/InventoryContext';
-import { BarChart3 } from 'lucide-react';
+import { BarChart3, RefreshCw, Download, CheckCircle2, AlertTriangle, Info, PackageSearch } from 'lucide-react';
+import { apiCall } from '@/lib/api';
+
+interface ConsolidadoItem {
+    id: number;
+    producto_item: number;
+    producto: string;
+    codigo: string;
+    sistema: number;
+    fisico: number;
+    diferencia: number;
+    unidad_medida: string;
+    total_sistema?: number;
+    total_fisico?: number;
+    resultado?: 'CONFORME' | 'SOBRANTE' | 'FALTANTE';
+}
+
+interface ResumenData {
+    total_productos: number;
+    total_sistema?: number;
+    total_fisico?: number;
+    gran_total_sistema?: number;
+    gran_total_fisico?: number;
+    diferencia_total: number;
+    productos_sobrantes?: number;
+    productos_faltantes?: number;
+    productos_conformes?: number;
+    total_sobrantes?: number;
+    total_faltantes?: number;
+    total_conformes?: number;
+}
 
 export default function ConsolidadoPage() {
-    useInventory();
+    const { state, showAlert } = useInventory();
+    const [loading, setLoading] = useState(false);
+    const [generating, setGenerating] = useState(false);
+    const [fetchError, setFetchError] = useState<string | null>(null);
+    const [callaoData, setCallaoData] = useState<ConsolidadoItem[]>([]);
+    const [malvinasData, setMalvinasData] = useState<ConsolidadoItem[]>([]);
+    const [generalData, setGeneralData] = useState<ConsolidadoItem[]>([]);
+    const [resumenCallao, setResumenCallao] = useState<ResumenData | null>(null);
+    const [resumenMalvinas, setResumenMalvinas] = useState<ResumenData | null>(null);
+    const [resumenGeneral, setResumenGeneral] = useState<ResumenData | null>(null);
+    const hasFetchedRef = useRef(false);
+
+    const inventoryId = state?.sesionActual?.inventario_id;
+
+    const fetchConsolidados = useCallback(async () => {
+        if (!inventoryId) {
+            setLoading(false);
+            return;
+        }
+
+        setLoading(true);
+        setFetchError(null);
+        
+        // Timeout para evitar que se quede cargando indefinidamente
+        let timeoutId: NodeJS.Timeout | null = null;
+        timeoutId = setTimeout(() => {
+            setFetchError('La carga está tardando demasiado. Por favor, intente nuevamente o genere los consolidados primero.');
+            setLoading(false);
+        }, 30000); // 30 segundos timeout
+        
+        try {
+            console.log('Iniciando carga de consolidados para inventario:', inventoryId);
+            const startTime = Date.now();
+            const data = await apiCall(`obtener_consolidados_completos&inventario_id=${inventoryId}`);
+            const loadTime = Date.now() - startTime;
+            console.log(`Consolidados cargados en ${loadTime}ms`);
+            
+            if (timeoutId) clearTimeout(timeoutId);
+
+            if (data.success) {
+                const callaoConsolidado = data.callao?.consolidado || [];
+                const malvinasConsolidado = data.malvinas?.consolidado || [];
+                
+                // Ordenar malvinasData según el orden de Callao
+                const malvinasMap = new Map<string, ConsolidadoItem>();
+                malvinasConsolidado.forEach((item: ConsolidadoItem) => {
+                    const codigo = String(item.codigo || '').trim().toUpperCase();
+                    if (codigo) {
+                        malvinasMap.set(codigo, item);
+                    }
+                });
+                
+                const sortedMalvinasData: ConsolidadoItem[] = [];
+                
+                // Primero agregar los productos que están en Callao, en el mismo orden
+                callaoConsolidado.forEach((callaoItem: ConsolidadoItem) => {
+                    const codigo = String(callaoItem.codigo || '').trim().toUpperCase();
+                    const malvinasItem = malvinasMap.get(codigo);
+                    if (malvinasItem) {
+                        sortedMalvinasData.push(malvinasItem);
+                        malvinasMap.delete(codigo);
+                    }
+                });
+                
+                // Luego agregar los productos que solo están en Malvinas (al final)
+                malvinasMap.forEach((item) => {
+                    sortedMalvinasData.push(item);
+                });
+                
+                // CONSTRUIR CONTEO GENERAL: Combinar Callao + Malvinas por código
+                // Crear mapa de Malvinas desde los datos originales (no usar malvinasMap porque ya fue modificado)
+                const malvinasMapForGeneral = new Map<string, ConsolidadoItem>();
+                malvinasConsolidado.forEach((item: ConsolidadoItem) => {
+                    const codigo = String(item.codigo || '').trim().toUpperCase();
+                    if (codigo) {
+                        malvinasMapForGeneral.set(codigo, item);
+                    }
+                });
+                
+                // Construir Conteo General según orden de Callao (optimizado)
+                const sortedGeneralData: ConsolidadoItem[] = [];
+                
+                // Procesar productos de Callao (en su orden)
+                callaoConsolidado.forEach((callaoItem: ConsolidadoItem) => {
+                    const codigo = String(callaoItem.codigo || '').trim().toUpperCase();
+                    const malvinasItem = malvinasMapForGeneral.get(codigo);
+                    
+                    // Calcular totales
+                    const callaoSistema = Number(callaoItem.sistema || 0);
+                    const callaoFisico = Number(callaoItem.fisico || 0);
+                    const malvinasSistema = Number(malvinasItem?.sistema || 0);
+                    const malvinasFisico = Number(malvinasItem?.fisico || 0);
+                    
+                    const totalSistema = callaoSistema + malvinasSistema;
+                    const totalFisico = callaoFisico + malvinasFisico;
+                    const diferencia = totalFisico - totalSistema;
+                    
+                    // Determinar resultado
+                    let resultado: 'CONFORME' | 'SOBRANTE' | 'FALTANTE' = 'CONFORME';
+                    if (totalFisico > totalSistema) {
+                        resultado = 'SOBRANTE';
+                    } else if (totalSistema > totalFisico) {
+                        resultado = 'FALTANTE';
+                    }
+                    
+                    sortedGeneralData.push({
+                        id: callaoItem.id || 0,
+                        producto_item: callaoItem.producto_item || 0,
+                        producto: callaoItem.producto || '',
+                        codigo: codigo,
+                        sistema: callaoSistema,
+                        fisico: callaoFisico,
+                        diferencia: diferencia,
+                        unidad_medida: callaoItem.unidad_medida || 'UNIDAD',
+                        total_sistema: totalSistema,
+                        total_fisico: totalFisico,
+                        resultado: resultado
+                    });
+                    
+                    // Remover de mapa para no duplicar
+                    malvinasMapForGeneral.delete(codigo);
+                });
+                
+                // Agregar productos que solo están en Malvinas
+                malvinasMapForGeneral.forEach((malvinasItem) => {
+                    const codigo = String(malvinasItem.codigo || '').trim().toUpperCase();
+                    const malvinasSistema = Number(malvinasItem.sistema || 0);
+                    const malvinasFisico = Number(malvinasItem.fisico || 0);
+                    
+                    const totalSistema = malvinasSistema; // Solo Malvinas
+                    const totalFisico = malvinasFisico; // Solo Malvinas
+                    const diferencia = totalFisico - totalSistema;
+                    
+                    // Determinar resultado
+                    let resultado: 'CONFORME' | 'SOBRANTE' | 'FALTANTE' = 'CONFORME';
+                    if (totalFisico > totalSistema) {
+                        resultado = 'SOBRANTE';
+                    } else if (totalSistema > totalFisico) {
+                        resultado = 'FALTANTE';
+                    }
+                    
+                    sortedGeneralData.push({
+                        id: malvinasItem.id || 0,
+                        producto_item: malvinasItem.producto_item || 0,
+                        producto: malvinasItem.producto || '',
+                        codigo: codigo,
+                        sistema: malvinasSistema,
+                        fisico: malvinasFisico,
+                        diferencia: diferencia,
+                        unidad_medida: malvinasItem.unidad_medida || 'UNIDAD',
+                        total_sistema: totalSistema,
+                        total_fisico: totalFisico,
+                        resultado: resultado
+                    });
+                });
+                
+                setCallaoData(callaoConsolidado);
+                setMalvinasData(sortedMalvinasData);
+                setGeneralData(sortedGeneralData);
+                setResumenCallao(data.callao?.resumen || null);
+                setResumenMalvinas(data.malvinas?.resumen || null);
+                setResumenGeneral(data.general?.resumen || null);
+                
+                if (callaoConsolidado.length === 0 && malvinasConsolidado.length === 0 && sortedGeneralData.length === 0) {
+                    setFetchError('No hay datos de consolidado. Asegúrate de haber cargado los archivos Excel de sistema para Callao y Malvinas.');
+                } else {
+                    setFetchError(null);
+                }
+            } else {
+                const msg = data.message || 'Error al cargar los consolidados';
+                if (!callaoData.length && !malvinasData.length && !generalData.length) {
+                    setFetchError(msg);
+                }
+            }
+        } catch (error) {
+            console.error('Error fetching consolidados:', error);
+            if (timeoutId) clearTimeout(timeoutId);
+            setFetchError('Error de conexión al servidor. Por favor, verifique su conexión e intente nuevamente.');
+        } finally {
+            setLoading(false);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [inventoryId]);
+
+    useEffect(() => {
+        if (inventoryId && !hasFetchedRef.current) {
+            hasFetchedRef.current = true;
+            // Pequeño delay para evitar múltiples llamadas simultáneas
+            const timeoutId = setTimeout(() => {
+                fetchConsolidados();
+            }, 100);
+            return () => clearTimeout(timeoutId);
+        }
+    }, [inventoryId, fetchConsolidados]);
+
+    // Escuchar evento de proforma registrada para recargar datos
+    useEffect(() => {
+        const handleProformaRegistrada = (event: Event) => {
+            const customEvent = event as CustomEvent;
+            const { almacen, inventario_id } = customEvent.detail || {};
+            
+            // Solo recargar si es el mismo inventario
+            if (inventoryId && inventario_id === inventoryId) {
+                // Resetear flag para forzar recarga
+                hasFetchedRef.current = false;
+                // Pequeño delay para dar tiempo al backend de procesar
+                setTimeout(() => {
+                    fetchConsolidados();
+                }, 300);
+            }
+        };
+
+        window.addEventListener('proformaRegistrada', handleProformaRegistrada);
+        return () => {
+            window.removeEventListener('proformaRegistrada', handleProformaRegistrada);
+        };
+    }, [fetchConsolidados, inventoryId]);
+
+    const handleGenerarConsolidados = async () => {
+        if (!inventoryId) {
+            showAlert('Atención', 'No hay un inventario activo seleccionado', 'warning');
+            return;
+        }
+
+        setGenerating(true);
+        try {
+            const data = await apiCall('generar_todos_consolidados', 'POST', { inventario_id: inventoryId });
+
+            if (data.success) {
+                showAlert('Éxito', 'Consolidados generados correctamente', 'success');
+                hasFetchedRef.current = false;
+                fetchConsolidados();
+            } else {
+                showAlert('Error', data.message || 'Error al generar los consolidados', 'error');
+            }
+        } catch (error) {
+            console.error('Error generating consolidados:', error);
+            showAlert('Error', 'Error de conexión al servidor', 'error');
+        } finally {
+            setGenerating(false);
+        }
+    };
+
+    const handleRefresh = () => {
+        hasFetchedRef.current = false;
+        fetchConsolidados();
+    };
+
+    const handleExportarExcel = async (tipo: 'callao' | 'malvinas' | 'general') => {
+        if (!inventoryId) return;
+
+        try {
+            const data = await apiCall(`exportar_consolidado_excel&inventario_id=${inventoryId}&tipo=${tipo}`);
+
+            if (data.success) {
+                const blob = new Blob([data.content], { type: 'text/csv;charset=utf-8;' });
+                const url = window.URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.setAttribute('href', url);
+                link.setAttribute('download', data.filename || `consolidado_${tipo}.csv`);
+                link.style.visibility = 'hidden';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                showAlert('Éxito', `Archivo ${tipo} exportado con éxito`, 'success');
+            } else {
+                showAlert('Error', data.message || 'Error al exportar los datos', 'error');
+            }
+        } catch (error) {
+            console.error('Error exporting excel:', error);
+            showAlert('Error', 'Error al exportar los datos', 'error');
+        }
+    };
+
+    const getResultadoStyle = (resultado?: string) => {
+        switch (resultado) {
+            case 'CONFORME':
+                return 'bg-green-100 text-green-700 border-green-200';
+            case 'SOBRANTE':
+                return 'bg-yellow-100 text-yellow-700 border-yellow-200';
+            case 'FALTANTE':
+                return 'bg-red-100 text-red-700 border-red-200';
+            default:
+                return 'bg-gray-100 text-gray-700 border-gray-200';
+        }
+    };
+
+    const getResultadoIcon = (resultado?: string) => {
+        switch (resultado) {
+            case 'CONFORME':
+                return <CheckCircle2 className="w-3.5 h-3.5 mr-1" />;
+            case 'SOBRANTE':
+                return <Info className="w-3.5 h-3.5 mr-1" />;
+            case 'FALTANTE':
+                return <AlertTriangle className="w-3.5 h-3.5 mr-1" />;
+            default:
+                return null;
+        }
+    };
 
     return (
-        <div id="view-consolidado" className="animate-in fade-in duration-500 font-poppins">
+        <div id="view-consolidado" className="animate-in fade-in duration-500 font-poppins pb-10">
             <div className="container mx-auto">
-                <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 mb-6 transition-all">
-                    <header className="flex justify-between items-start flex-wrap gap-4 mb-6">
-                        <div className="flex items-center space-x-3">
-                            <div className="w-12 h-12 bg-gradient-to-br from-[#002D5A] to-[#002D5A] rounded-xl flex items-center justify-center text-white shadow-sm transition-all duration-200">
-                                <BarChart3 className="w-6 h-6" />
+                <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 mb-6 transition-all">
+                    <header className="flex justify-between items-center flex-wrap gap-4 mb-8">
+                        <div className="flex items-center space-x-4">
+                            <div className="w-14 h-14 bg-gradient-to-br from-[#002D5A] to-[#004a8d] rounded-2xl flex items-center justify-center text-white shadow-md transition-all duration-200">
+                                <BarChart3 className="w-7 h-7" />
                             </div>
                             <div>
-                                <h1 className="font-bold text-gray-900 m-0" style={{ fontFamily: 'var(--font-poppins)', fontSize: '22px' }}>
+                                <h1 className="font-bold text-gray-900 m-0 leading-tight" style={{ fontSize: '24px' }}>
                                     Consolidado de Inventarios
                                 </h1>
-                                <p className="text-sm text-gray-600 mt-1" style={{ fontFamily: 'var(--font-poppins)' }}>
-                                    Resumen técnico y consolidado de productos en todos los almacenes registrados
+                                <p className="text-sm text-gray-500 mt-1">
+                                    Resumen técnico y consolidado final por almacén y general
                                 </p>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                            <button
+                                onClick={handleGenerarConsolidados}
+                                disabled={generating || loading}
+                                className={`flex items-center px-5 py-2.5 rounded-xl font-semibold text-sm transition-all shadow-sm ${generating
+                                    ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                                    : 'bg-[#F4B400] text-[#002D5A] hover:bg-[#e2a600] active:scale-95'
+                                    }`}
+                            >
+                                <RefreshCw className={`w-4 h-4 mr-2 ${generating ? 'animate-spin' : ''}`} />
+                                {generating ? 'Procesando...' : 'Generar Consolidados'}
+                            </button>
+
+                            <div className="flex bg-gray-50 p-1 rounded-xl border border-gray-200">
+                                <button
+                                    onClick={() => handleExportarExcel('general')}
+                                    className="p-2 text-gray-600 hover:text-[#198754] hover:bg-white rounded-lg transition-all"
+                                    title="Exportar General"
+                                >
+                                    <Download className="w-5 h-5" />
+                                </button>
+                                <div className="w-px h-6 bg-gray-200 self-center mx-1"></div>
+                                <button
+                                    onClick={handleRefresh}
+                                    disabled={loading}
+                                    className="p-2 text-gray-600 hover:text-[#002D5A] hover:bg-white rounded-lg transition-all"
+                                    title="Actualizar Vista"
+                                >
+                                    <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
+                                </button>
                             </div>
                         </div>
                     </header>
 
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-8">
-                        {/* Almacén Callao */}
-                        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden flex flex-col h-full">
-                            <div className="bg-[#002D5A] text-white p-4 text-center font-bold tracking-wide uppercase text-sm">
-                                Inventario Callao
+                    {/* Error banner */}
+                    {fetchError && !loading && (
+                        <div className="mb-6 flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl p-4">
+                            <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+                            <div className="flex-1">
+                                <p className="text-sm font-semibold text-red-700">Error al cargar consolidados</p>
+                                <p className="text-xs text-red-600 mt-0.5">{fetchError}</p>
                             </div>
-                            <div className="p-0 flex-grow">
-                                <table className="w-full text-sm">
+                            <button
+                                onClick={handleRefresh}
+                                className="text-xs text-red-600 hover:text-red-800 font-semibold underline"
+                            >
+                                Reintentar
+                            </button>
+                        </div>
+                    )}
+
+                    <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
+                        {/* Almacén Callao */}
+                        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm flex flex-col overflow-hidden">
+                            <div className="bg-[#002D5A] text-white p-4 flex justify-center items-center rounded-t-2xl">
+                                <span className="font-bold tracking-wide uppercase text-xs">Inventario Callao</span>
+                            </div>
+                            <div className="flex-grow">
+                                <table className="w-full text-sm border-collapse table-auto">
                                     <thead>
-                                        <tr className="border-b-[4px]" style={{ backgroundColor: '#002D5A', borderColor: '#F4B400' }}>
-                                            <th className="px-3 py-2 text-left font-bold text-white text-[10px] uppercase">Item</th>
-                                            <th className="px-3 py-2 text-left font-bold text-white text-[10px] uppercase">Producto</th>
-                                            <th className="px-3 py-2 text-left font-bold text-white text-[10px] uppercase">Sistema</th>
-                                            <th className="px-3 py-2 text-left font-bold text-white text-[10px] uppercase">Físico</th>
-                                            <th className="px-3 py-2 text-left font-bold text-white text-[10px] uppercase">Diferencia</th>
+                                        <tr className="bg-gray-50 border-b border-gray-200">
+                                            <th className="px-2 py-3 text-center font-bold text-gray-600 text-[10px] uppercase w-16">Item</th>
+                                            <th className="px-2 py-3 text-left font-bold text-gray-600 text-[10px] uppercase">Producto</th>
+                                            <th className="px-2 py-3 text-center font-bold text-gray-600 text-[10px] uppercase w-20">Sistema</th>
+                                            <th className="px-2 py-3 text-center font-bold text-gray-600 text-[10px] uppercase w-20">Físico</th>
+                                            <th className="px-2 py-3 text-center font-bold text-gray-600 text-[10px] uppercase w-24">Dif.</th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-gray-100">
-                                        <tr>
-                                            <td colSpan={5} className="px-3 py-8 text-center text-gray-400 font-medium">Sin datos</td>
-                                        </tr>
+                                        {loading ? (
+                                            <tr>
+                                                <td colSpan={5} className="px-3 py-10 text-center">
+                                                    <div className="flex flex-col items-center justify-center gap-2">
+                                                        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-[#002D5A]"></div>
+                                                        <span className="text-xs text-gray-500">Cargando datos...</span>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ) : callaoData.length > 0 ? (
+                                            callaoData.map((item, idx) => (
+                                                <tr key={item.id || idx} className="hover:bg-gray-50 transition-colors">
+                                                    <td className="px-2 py-3 text-center text-gray-500 font-medium text-[11px]">{item.producto_item}</td>
+                                                    <td className="px-2 py-3 text-left text-gray-700 font-semibold line-clamp-1 text-[11px]" title={item.producto}>{item.producto}</td>
+                                                    <td className="px-2 py-3 text-center text-gray-600 font-medium text-[11px]">{item.sistema}</td>
+                                                    <td className="px-2 py-3 text-center text-[#002D5A] font-bold text-[11px]">{item.fisico}</td>
+                                                    <td className={`px-2 py-3 text-center font-bold text-[11px] ${item.diferencia < 0 ? 'text-red-500' : item.diferencia > 0 ? 'text-blue-500' : 'text-gray-400'}`}>
+                                                        {item.diferencia > 0 ? `+${item.diferencia}` : item.diferencia}
+                                                    </td>
+                                                </tr>
+                                            ))
+                                        ) : (
+                                            <tr><td colSpan={5} className="px-3 py-16 text-center">
+                                                <PackageSearch className="w-10 h-10 text-gray-300 mx-auto mb-2" />
+                                                <p className="text-gray-400 font-medium text-sm">Sin datos de Callao</p>
+                                                <p className="text-gray-300 text-xs mt-1">Genera los consolidados primero</p>
+                                            </td></tr>
+                                        )}
                                     </tbody>
                                 </table>
                             </div>
                         </div>
 
                         {/* Almacén Malvinas */}
-                        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden flex flex-col h-full">
-                            <div className="bg-[#F4B400] text-[#001F3D] p-4 text-center font-bold tracking-wide uppercase text-sm">
-                                Inventario Malvinas
+                        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm flex flex-col overflow-hidden">
+                            <div className="bg-[#F4B400] text-[#001F3D] p-4 flex justify-center items-center rounded-t-2xl">
+                                <span className="font-bold tracking-wide uppercase text-xs">Inventario Malvinas</span>
                             </div>
-                            <div className="p-0 flex-grow">
-                                <table className="w-full text-sm">
+                            <div className="flex-grow">
+                                <table className="w-full text-sm border-collapse table-auto">
                                     <thead>
-                                        <tr className="border-b-[4px]" style={{ backgroundColor: '#F4B400', borderColor: '#002D5A' }}>
-                                            <th className="px-3 py-2 text-left font-bold text-[#002D5A] text-[10px] uppercase">Producto</th>
-                                            <th className="px-3 py-2 text-left font-bold text-[#002D5A] text-[10px] uppercase">Sistema</th>
-                                            <th className="px-3 py-2 text-left font-bold text-[#002D5A] text-[10px] uppercase">Físico</th>
-                                            <th className="px-3 py-2 text-left font-bold text-[#002D5A] text-[10px] uppercase">Diferencia</th>
+                                        <tr className="bg-gray-50 border-b border-gray-200">
+                                            <th className="px-2 py-3 text-left font-bold text-gray-600 text-[10px] uppercase">Producto</th>
+                                            <th className="px-2 py-3 text-center font-bold text-gray-600 text-[10px] uppercase w-20">Sistema</th>
+                                            <th className="px-2 py-3 text-center font-bold text-gray-600 text-[10px] uppercase w-20">Físico</th>
+                                            <th className="px-2 py-3 text-center font-bold text-gray-600 text-[10px] uppercase w-24">Dif.</th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-gray-100">
-                                        <tr>
-                                            <td colSpan={4} className="px-3 py-8 text-center text-gray-400 font-medium">Sin datos</td>
-                                        </tr>
+                                        {loading ? (
+                                            <tr>
+                                                <td colSpan={4} className="px-3 py-10 text-center">
+                                                    <div className="flex flex-col items-center justify-center gap-2">
+                                                        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-[#F4B400]"></div>
+                                                        <span className="text-xs text-gray-500">Cargando datos...</span>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ) : malvinasData.length > 0 ? (
+                                            malvinasData.map((item, idx) => (
+                                                <tr key={item.id || idx} className="hover:bg-gray-50 transition-colors">
+                                                    <td className="px-2 py-3 text-left text-gray-700 font-semibold line-clamp-1 text-[11px]" title={item.producto}>{item.producto}</td>
+                                                    <td className="px-2 py-3 text-center text-gray-600 font-medium text-[11px]">{item.sistema}</td>
+                                                    <td className="px-2 py-3 text-center text-[#002D5A] font-bold text-[11px]">{item.fisico}</td>
+                                                    <td className={`px-2 py-3 text-center font-bold text-[11px] ${item.diferencia < 0 ? 'text-red-500' : item.diferencia > 0 ? 'text-blue-500' : 'text-gray-400'}`}>
+                                                        {item.diferencia > 0 ? `+${item.diferencia}` : item.diferencia}
+                                                    </td>
+                                                </tr>
+                                            ))
+                                        ) : (
+                                            <tr><td colSpan={4} className="px-3 py-16 text-center">
+                                                <PackageSearch className="w-10 h-10 text-gray-300 mx-auto mb-2" />
+                                                <p className="text-gray-400 font-medium text-sm">Sin datos de Malvinas</p>
+                                                <p className="text-gray-300 text-xs mt-1">Genera los consolidados primero</p>
+                                            </td></tr>
+                                        )}
                                     </tbody>
                                 </table>
                             </div>
                         </div>
 
                         {/* Conteo General */}
-                        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden flex flex-col h-full">
-                            <div className="bg-[#198754] text-white p-4 text-center font-bold tracking-wide uppercase text-sm">
-                                Conteo General
+                        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm flex flex-col overflow-hidden">
+                            <div className="bg-[#198754] text-white p-4 flex justify-center items-center rounded-t-2xl">
+                                <span className="font-bold tracking-wide uppercase text-xs">Conteo General</span>
                             </div>
-                            <div className="p-0 flex-grow">
-                                <table className="w-full text-sm">
+                            <div className="flex-grow">
+                                <table className="w-full text-sm border-collapse table-auto">
                                     <thead>
-                                        <tr className="border-b-[4px]" style={{ backgroundColor: '#198754', borderColor: '#F4B400' }}>
-                                            <th className="px-3 py-2 text-center font-bold text-white text-[10px] uppercase">Total Sistema</th>
-                                            <th className="px-3 py-2 text-center font-bold text-white text-[10px] uppercase">Total Físico</th>
-                                            <th className="px-3 py-2 text-center font-bold text-white text-[10px] uppercase">Diferencia</th>
-                                            <th className="px-3 py-2 text-center font-bold text-white text-[10px] uppercase">Resultado</th>
+                                        <tr className="bg-gray-50 border-b border-gray-200">
+                                            <th className="px-2 py-3 text-center font-bold text-gray-600 text-[10px] uppercase w-24">Total Sistema</th>
+                                            <th className="px-2 py-3 text-center font-bold text-gray-600 text-[10px] uppercase w-24">Total Físico</th>
+                                            <th className="px-2 py-3 text-center font-bold text-gray-600 text-[10px] uppercase w-24">Diferencia</th>
+                                            <th className="px-2 py-3 text-center font-bold text-gray-600 text-[10px] uppercase w-28">Resultado</th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-gray-100">
-                                        <tr>
-                                            <td colSpan={4} className="px-3 py-12 text-center text-gray-400 font-medium">Sin datos</td>
-                                        </tr>
+                                        {loading ? (
+                                            <tr>
+                                                <td colSpan={4} className="px-3 py-10 text-center">
+                                                    <div className="flex flex-col items-center justify-center gap-2">
+                                                        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-[#198754]"></div>
+                                                        <span className="text-xs text-gray-500">Cargando datos...</span>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ) : generalData.length > 0 ? (
+                                            generalData.map((item, idx) => (
+                                                <tr key={item.id || idx} className="hover:bg-gray-50 transition-colors">
+                                                    <td className="px-2 py-3 text-center text-gray-600 font-medium text-[11px]">{item.total_sistema || 0}</td>
+                                                    <td className="px-2 py-3 text-center text-[#002D5A] font-extrabold text-[11px]">{item.total_fisico || 0}</td>
+                                                    <td className={`px-2 py-3 text-center font-bold text-[11px] ${item.diferencia < 0 ? 'text-red-500' : item.diferencia > 0 ? 'text-blue-500' : 'text-gray-400'}`}>
+                                                        {item.diferencia > 0 ? `+${item.diferencia}` : item.diferencia}
+                                                    </td>
+                                                    <td className="px-2 py-3 text-center">
+                                                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold border ${getResultadoStyle(item.resultado)} shadow-sm`}>
+                                                            {getResultadoIcon(item.resultado)}
+                                                            {item.resultado || 'N/A'}
+                                                        </span>
+                                                    </td>
+                                                </tr>
+                                            ))
+                                        ) : (
+                                            <tr><td colSpan={4} className="px-3 py-16 text-center">
+                                                <PackageSearch className="w-10 h-10 text-gray-300 mx-auto mb-2" />
+                                                <p className="text-gray-400 font-medium text-sm">Sin datos generales</p>
+                                                <p className="text-gray-300 text-xs mt-1">Genera los consolidados primero</p>
+                                            </td></tr>
+                                        )}
                                     </tbody>
                                 </table>
                             </div>

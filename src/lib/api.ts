@@ -23,7 +23,7 @@ export async function apiCall(action: string, method: string = 'GET', data: unkn
     if (!response.ok) {
       return {
         success: false,
-        message: result.message || `Error del servidor: ${response.status}`
+        message: result.message || result.error || `Error del servidor: ${response.status}`
       };
     }
 

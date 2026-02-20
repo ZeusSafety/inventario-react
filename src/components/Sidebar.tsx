@@ -21,8 +21,8 @@ export default function Sidebar({ isOpen = true, onClose }: { isOpen?: boolean; 
         { id: 'malvinas', label: 'Almacén Malvinas', href: '/malvinas', icon: 'store' },
         { id: 'comparar', label: 'Comparar', href: '/comparar', icon: 'arrow' },
         { id: 'consolidado', label: 'Consolidado', href: '/consolidado', icon: 'grid' },
-        { id: 'registro', label: 'Registro', href: '/registro', icon: 'archive' },
         { id: 'proformas', label: 'Proformas', href: '/proformas', icon: 'file' },
+        { id: 'registro', label: 'Registro', href: '/registro', icon: 'archive' },
     ];
 
     const getIcon = (iconName: string) => {
