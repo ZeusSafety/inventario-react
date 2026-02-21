@@ -6163,10 +6163,10 @@ def registrar_proforma(data):
                     # Regenerar completamente las tablas de comparación para asegurar que reflejen los cambios
                     if data['almacen'] == 'callao':
                         obtener_comparacion_callao(data['inventario_id'])
-                        obtener_consolidado_callao(data['inventario_id'])
+                        obtener_consolidado_callao(data['inventario_id'], forzar_regenerar=True)  # Forzar regeneración después de proforma
                     elif data['almacen'] == 'malvinas':
                         obtener_comparacion_malvinas(data['inventario_id'])
-                        obtener_consolidado_malvinas(data['inventario_id'])
+                        obtener_consolidado_malvinas(data['inventario_id'], forzar_regenerar=True)  # Forzar regeneración después de proforma
                     
                     # Actualizar consolidado general siempre
                     obtener_consolidado_general(data['inventario_id'])

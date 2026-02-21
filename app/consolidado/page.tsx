@@ -233,10 +233,10 @@ export default function ConsolidadoPage() {
             if (inventoryId && inventario_id === inventoryId) {
                 // Resetear flag para forzar recarga
                 hasFetchedRef.current = false;
-                // Pequeño delay para dar tiempo al backend de procesar
+                // Delay más largo para dar tiempo al backend de regenerar completamente el consolidado
                 setTimeout(() => {
                     fetchConsolidados();
-                }, 500);
+                }, 1500);
             }
         };
 

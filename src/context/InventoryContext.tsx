@@ -370,7 +370,9 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         try {
             const response = await apiCall('listar_proformas', 'GET');
             console.log('Respuesta de listar_proformas:', response);
-            if (response.success) {
+            
+            // Si la respuesta es exitosa o si simplemente no hay proformas (lista vacía es válida)
+            if (response.success || (response.proformas && Array.isArray(response.proformas))) {
                 // Mapear los datos del backend al formato esperado
                 const proformas = response.proformas || [];
                 const proformasMapeadas = proformas.map((pf: any) => ({
@@ -384,14 +386,33 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                     archivo_pdf: pf.archivo_pdf || null,
                     total_productos: pf.total_productos || 0
                 }));
-                console.log('Proformas mapeadas:', proformasMapeadas);
+                
+                if (proformasMapeadas.length > 0) {
+                    console.log('Proformas mapeadas:', proformasMapeadas);
+                } else {
+                    console.log('No hay proformas registradas para este inventario');
+                }
+                
                 setState((prev: AppState) => ({
                     ...prev,
                     proformas: proformasMapeadas
                 }));
             } else {
-                console.error('Error en listar_proformas:', response.message);
-                // Limpiar proformas si hay error
+                // Solo mostrar error si es un error real, no cuando simplemente no hay datos
+                const message: string = (response.message as string) || 'Error desconocido';
+                const messageLower = message.toLowerCase();
+                const isNormalCase = messageLower.includes('no se especificó inventario') || 
+                                    messageLower.includes('no hay inventario activo') ||
+                                    messageLower.includes('inventario activo');
+                
+                if (!isNormalCase) {
+                    console.error('Error en listar_proformas:', message);
+                } else {
+                    // Es normal que no haya inventario activo, solo loguear sin error
+                    console.log('No hay inventario activo, lista de proformas vacía');
+                }
+                
+                // Limpiar proformas si hay error o no hay inventario
                 setState((prev: AppState) => ({
                     ...prev,
                     proformas: []
