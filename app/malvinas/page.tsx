@@ -12,6 +12,26 @@ import * as XLSX from 'xlsx';
 
 const TIENDAS = ['TIENDA 3006', 'TIENDA 3006 B', 'TIENDA 3131', 'TIENDA 3133', 'TIENDA 412-A'];
 
+// Función helper para formatear fechas a hora de Perú
+const formatearFechaPeru = (fechaStr: string) => {
+    if (!fechaStr) return '-';
+    try {
+        // La fecha viene del backend ya en formato YYYY-MM-DD HH:MM:SS
+        // MySQL con time_zone = '-05:00' ya devuelve en hora de Perú
+        // Solo formatear a DD/MM/YYYY HH:MM:SS
+        const [datePart, timePart] = fechaStr.split(' ');
+        if (!datePart || !timePart) return fechaStr;
+        
+        const [year, month, day] = datePart.split('-');
+        const [hour, minute, second] = timePart.split(':');
+        
+        // Formatear directamente (ya viene en hora de Perú del backend)
+        return `${day}/${month}/${year} ${hour}:${minute}:${second || '00'}`;
+    } catch {
+        return fechaStr;
+    }
+};
+
 export default function MalvinasPage() {
     const { state, setState, updateSesionActual, showAlert, showConfirm } = useInventory();
     const [filterText, setFilterText] = useState('');
@@ -90,7 +110,7 @@ export default function MalvinasPage() {
                     response.conteos_por_cajas.forEach((c: any) => {
                         allSessions.push({
                             id: c.id,
-                            numero: c.numero_inventario || c.inventario_numero,
+                            numero: c.inventario_numero || c.numero_inventario,
                             registrado: c.registrado_por,
                             inicio: c.fecha_hora_inicio,
                             fin: c.fecha_hora_final,
@@ -106,7 +126,7 @@ export default function MalvinasPage() {
                     response.conteos_por_stand.forEach((c: any) => {
                         allSessions.push({
                             id: c.id,
-                            numero: c.numero_inventario || c.inventario_numero,
+                            numero: c.inventario_numero || c.numero_inventario,
                             registrado: c.registrado_por,
                             inicio: c.fecha_hora_inicio,
                             fin: c.fecha_hora_final,
@@ -130,54 +150,58 @@ export default function MalvinasPage() {
                     allSessions.forEach((s: any) => todosIds.add(s.id));
                     setConteosAnterioresIds(todosIds);
                 } else {
-                    // Cargas posteriores: detectar conteos nuevos
-                    nuevosIds = new Set<number>();
-                    const nuevosConteos: any[] = [];
-                    
-                    allSessions.forEach((s: any) => {
-                        if (!conteosAnterioresIds.has(s.id)) {
-                            nuevosIds.add(s.id);
-                            nuevosConteos.push(s);
-                        }
-                    });
-                    
-                    // Si hay conteos nuevos, agregarlos al set de nuevos conteos y mostrar notificación
-                    if (nuevosIds.size > 0) {
-                        setNuevosConteosIds(prev => {
-                            const nuevoSet = new Set(prev);
-                            nuevosIds.forEach(id => nuevoSet.add(id));
-                            return nuevoSet;
+                    // Solo detectar y mostrar notificaciones de conteos nuevos cuando estás en la página 1
+                    // Si cambias de página, no mostrar notificaciones (solo actualizar el set)
+                    if (page === 1) {
+                        // Cargas posteriores en página 1: detectar conteos nuevos
+                        nuevosIds = new Set<number>();
+                        const nuevosConteos: any[] = [];
+                        
+                        allSessions.forEach((s: any) => {
+                            if (!conteosAnterioresIds.has(s.id)) {
+                                nuevosIds.add(s.id);
+                                nuevosConteos.push(s);
+                            }
                         });
                         
-                        // Mostrar notificación profesional
-                        if (nuevosConteos.length === 1) {
-                            const conteo = nuevosConteos[0];
-                            showAlert(
-                                'Nuevo Conteo Registrado',
-                                `Se registró un conteo de tipo "${conteo.tipo === 'cajas' ? 'Cajas' : 'Stand'}" para el inventario "${conteo.numero}" por ${conteo.registrado} en ${conteo.tienda || 'Malvinas'}`,
-                                'success'
-                            );
-                        } else {
-                            showAlert(
-                                'Nuevos Conteos Registrados',
-                                `Se registraron ${nuevosConteos.length} nuevos conteos`,
-                                'success'
-                            );
+                        // Si hay conteos nuevos, agregarlos al set de nuevos conteos y mostrar notificación
+                        if (nuevosIds.size > 0) {
+                            setNuevosConteosIds(prev => {
+                                const nuevoSet = new Set(prev);
+                                nuevosIds.forEach(id => nuevoSet.add(id));
+                                return nuevoSet;
+                            });
+                            
+                            // Mostrar notificación profesional
+                            if (nuevosConteos.length === 1) {
+                                const conteo = nuevosConteos[0];
+                                showAlert(
+                                    'Nuevo Conteo Registrado',
+                                    `Se registró un conteo de tipo "${conteo.tipo === 'cajas' ? 'Cajas' : 'Stand'}" para el inventario "${conteo.numero}" por ${conteo.registrado} en ${conteo.tienda || 'Malvinas'}`,
+                                    'success'
+                                );
+                            } else {
+                                showAlert(
+                                    'Nuevos Conteos Registrados',
+                                    `Se registraron ${nuevosConteos.length} nuevos conteos`,
+                                    'success'
+                                );
+                            }
+                            
+                            // Remover la animación después de 3 segundos
+                            nuevosIds.forEach(id => {
+                                setTimeout(() => {
+                                    setNuevosConteosIds(prev => {
+                                        const nuevoSet = new Set(prev);
+                                        nuevoSet.delete(id);
+                                        return nuevoSet;
+                                    });
+                                }, 3000);
+                            });
                         }
-                        
-                        // Remover la animación después de 3 segundos
-                        nuevosIds.forEach(id => {
-                            setTimeout(() => {
-                                setNuevosConteosIds(prev => {
-                                    const nuevoSet = new Set(prev);
-                                    nuevoSet.delete(id);
-                                    return nuevoSet;
-                                });
-                            }, 3000);
-                        });
                     }
                     
-                    // Actualizar el set global de IDs vistos (acumulativo)
+                    // Actualizar el set global de IDs vistos (acumulativo) - siempre, sin importar la página
                     setConteosAnterioresIds(prev => {
                         const nuevoSet = new Set(prev);
                         allSessions.forEach((s: any) => nuevoSet.add(s.id));
@@ -185,21 +209,9 @@ export default function MalvinasPage() {
                     });
                 }
                 
-                // Ordenar: primero los nuevos, luego por número de inventario
-                const idsNuevosParaOrdenar = nuevosIds;
-                const sesionesOrdenadas = [...allSessions].sort((a, b) => {
-                    const aEsNuevo = idsNuevosParaOrdenar.has(a.id);
-                    const bEsNuevo = idsNuevosParaOrdenar.has(b.id);
-                    
-                    // Si uno es nuevo y el otro no, el nuevo va primero
-                    if (aEsNuevo && !bEsNuevo) return -1;
-                    if (!aEsNuevo && bEsNuevo) return 1;
-                    
-                    // Si ambos son nuevos o ambos no son nuevos, ordenar por número de inventario
-                    const numA = (a.numero || '').toUpperCase();
-                    const numB = (b.numero || '').toUpperCase();
-                    return numA.localeCompare(numB);
-                });
+                // El backend ya ordena por ID DESC (más reciente primero), mantener ese orden
+                // No reordenar en el frontend para preservar el orden del backend
+                const sesionesOrdenadas = allSessions;
                 
                 setState((prev: any) => ({
                     ...prev,
@@ -465,26 +477,80 @@ export default function MalvinasPage() {
                 const wb = XLSX.read(bstr, { type: 'binary' });
                 const wsname = wb.SheetNames[0];
                 const ws = wb.Sheets[wsname];
-                const data = XLSX.utils.sheet_to_json(ws);
+                
+                // Leer como array de arrays para acceder por posición de columna
+                const dataArray = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) as any[][];
+                
+                if (dataArray.length === 0) {
+                    showAlert('Error', 'El archivo Excel está vacío.', 'error');
+                    return;
+                }
 
-                // OPTIMIZACIÓN: Crear mapa del Excel por código (O(n)) en lugar de buscar en cada iteración
+                // Encontrar índices de columnas: B=1 (código), N=13 (cantidad)
+                // Primero intentar por posición, luego por nombre como fallback
+                let codigoColIndex = 1; // Columna B (índice 1)
+                let cantidadColIndex = 13; // Columna N (índice 13)
+                
+                // Verificar si hay encabezados en la primera fila
+                const headerRow = dataArray[0] || [];
+                let foundCodigoByPosition = false;
+                let foundCantidadByPosition = false;
+
+                // Verificar si la columna B tiene datos (código)
+                if (headerRow.length > codigoColIndex && headerRow[codigoColIndex]) {
+                    foundCodigoByPosition = true;
+                } else {
+                    // Buscar por nombre como fallback
+                    const codigoHeader = headerRow.findIndex((h: any) => {
+                        const hStr = String(h || '').toLowerCase().trim();
+                        return hStr.includes('codigo') || hStr.includes('código') || hStr.includes('cod');
+                    });
+                    if (codigoHeader >= 0) {
+                        codigoColIndex = codigoHeader;
+                        foundCodigoByPosition = true;
+                    }
+                }
+
+                // Verificar si la columna N tiene datos (cantidad)
+                if (headerRow.length > cantidadColIndex && headerRow[cantidadColIndex]) {
+                    foundCantidadByPosition = true;
+                } else {
+                    // Buscar por nombre SOLO si no hay columna N (fallback)
+                    const cantidadHeader = headerRow.findIndex((h: any) => {
+                        const hStr = String(h || '').toLowerCase().trim();
+                        return hStr.includes('cantidad') || hStr.includes('cant') || hStr.includes('conteo');
+                    });
+                    if (cantidadHeader >= 0) {
+                        cantidadColIndex = cantidadHeader;
+                        foundCantidadByPosition = true;
+                    }
+                }
+
+                if (!foundCodigoByPosition) {
+                    showAlert('Error', 'No se encontró la columna "Código" (B) en el archivo Excel.', 'error');
+                    return;
+                }
+
+                if (!foundCantidadByPosition) {
+                    showAlert('Error', 'No se encontró la columna "Cantidad" (N) en el archivo Excel.', 'error');
+                    return;
+                }
+
+                // Crear mapa: código -> cantidad (usando posición de columnas)
                 const excelMap = new Map<string, any>();
                 
-                // Encontrar las columnas una sola vez
-                if (data.length > 0) {
-                    const firstRow = data[0] as Record<string, any>;
-                    const keys = Object.keys(firstRow);
-                    const codigoKey = keys.find(k => k.toLowerCase().includes('codigo') || k.toLowerCase().includes('código'));
-                    const cantKey = keys.find(k => k.toLowerCase().includes('cantidad') || k.toLowerCase().includes('cant') || k.toLowerCase().includes('conteo'));
+                // Empezar desde la fila 1 (saltar encabezados si existen)
+                const startRow = headerRow.some((h: any) => String(h || '').toLowerCase().includes('codigo') || String(h || '').toLowerCase().includes('cantidad')) ? 1 : 0;
+                
+                for (let i = startRow; i < dataArray.length; i++) {
+                    const row = dataArray[i];
+                    if (!row || row.length === 0) continue;
                     
-                    if (codigoKey && cantKey) {
-                        // Crear mapa: código -> cantidad
-                        data.forEach((row: any) => {
-                            const codigo = String(row[codigoKey] || '').trim().toUpperCase();
-                            if (codigo) {
-                                excelMap.set(codigo, row[cantKey]);
-                            }
-                        });
+                    const codigo = String(row[codigoColIndex] || '').trim().toUpperCase();
+                    const cantidad = row[cantidadColIndex];
+                    
+                    if (codigo && cantidad !== undefined && cantidad !== null && cantidad !== '') {
+                        excelMap.set(codigo, cantidad);
                     }
                 }
 
@@ -494,7 +560,7 @@ export default function MalvinasPage() {
                     const codigoNormalizado = String(fila.codigo || '').trim().toUpperCase();
                     const cantidadExcel = excelMap.get(codigoNormalizado);
                     
-                    if (cantidadExcel !== undefined && cantidadExcel !== null) {
+                    if (cantidadExcel !== undefined && cantidadExcel !== null && cantidadExcel !== '') {
                         updatedCount++;
                         return { ...fila, cantidad_conteo: String(cantidadExcel) };
                     }
@@ -645,10 +711,10 @@ export default function MalvinasPage() {
                 const response = await apiCall(`obtener_detalle_conteo&conteo_id=${sesion.id}`, 'GET');
                 if (response.success && response.productos) {
                     filas = response.productos.map((p: any) => ({
-                        item: p.item,
+                        item: p.item_producto || p.item,
                         producto: p.producto,
                         codigo: p.codigo,
-                        cantidad: p.cantidad_fisica,
+                        cantidad: p.cantidad || p.cantidad_fisica || 0,
                         unidad_medida: p.unidad_medida
                     }));
                 }
@@ -974,7 +1040,7 @@ export default function MalvinasPage() {
                             <div className="relative">
                                 <input
                                     type="text"
-                                    className="bg-white border-2 border-gray-200 text-sm rounded-xl block w-64 pl-10 p-2.5 focus:border-[#0B3B8C] outline-none transition-all shadow-sm"
+                                    className="bg-white border-2 border-gray-200 text-sm rounded-xl block w-96 pl-10 p-2.5 focus:border-[#0B3B8C] outline-none transition-all shadow-sm"
                                     placeholder="Buscar..."
                                     value={filterText}
                                     onChange={(e) => setFilterText(e.target.value)}
@@ -983,7 +1049,7 @@ export default function MalvinasPage() {
                             </div>
                             <button
                                 onClick={handleGenerateReport}
-                                className="bg-white border-2 border-[#0B3B8C] text-[#0B3B8C] font-bold px-6 py-2 rounded-full btn-oval flex items-center gap-2 hover:bg-blue-50 transition-colors text-sm shadow-sm"
+                                className="bg-[#002D5A] text-white font-bold px-6 py-2.5 rounded-full flex items-center gap-2 hover:bg-[#001F3D] transition-colors text-sm shadow-sm"
                             >
                                 <FileText className="w-4 h-4" />
                                 <span>Generar reporte</span>
@@ -1015,22 +1081,6 @@ export default function MalvinasPage() {
                                         </tr>
                                     ) : (
                                         state.sesiones.malvinas.map((s: any, idx: number) => {
-                                            // Generar color único basado en el usuario
-                                            const getUserColor = (usuario: string) => {
-                                                const hash = usuario.split('').reduce((acc, char) => char.charCodeAt(0) + ((acc << 5) - acc), 0);
-                                                const hue = Math.abs(hash % 360);
-                                                return `hsl(${hue}, 70%, 95%)`; // Color de fondo pastel
-                                            };
-
-                                            const getUserTextColor = (usuario: string) => {
-                                                const hash = usuario.split('').reduce((acc, char) => char.charCodeAt(0) + ((acc << 5) - acc), 0);
-                                                const hue = Math.abs(hash % 360);
-                                                return `hsl(${hue}, 70%, 35%)`; // Color de texto oscuro
-                                            };
-
-                                            const bgColor = getUserColor(s.registrado || '');
-                                            const textColor = getUserTextColor(s.registrado || '');
-
                                             const esNuevo = nuevosConteosIds.has(s.id);
                                             
                                             return (
@@ -1040,25 +1090,25 @@ export default function MalvinasPage() {
                                                         esNuevo ? 'animate-pulse-new' : ''
                                                     }`}
                                                     style={{ 
-                                                        backgroundColor: esNuevo ? `rgba(11, 59, 140, 0.08)` : bgColor
+                                                        backgroundColor: esNuevo ? `rgba(11, 59, 140, 0.08)` : 'white'
                                                     }}
                                                 >
-                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] font-medium" style={{ color: textColor }}>{idx + 1}</td>
-                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px]" style={{ color: textColor }}>{s.inicio}</td>
-                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px]" style={{ color: textColor }}>{s.numero}</td>
-                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px]" style={{ color: textColor }}>{s.tienda}</td>
-                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] font-bold uppercase" style={{ color: textColor }}>{s.tipo}</td>
-                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] font-bold" style={{ color: textColor }}>{s.registrado}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] font-medium text-gray-700">{(pageMalvinas - 1) * 10 + idx + 1}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] text-gray-700">{formatearFechaPeru(s.inicio)}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] text-gray-700">{s.numero}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] text-gray-700">{s.tienda}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] font-bold uppercase text-gray-700">{s.tipo}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] font-bold text-gray-700">{s.registrado}</td>
                                                     <td className="px-4 py-3 whitespace-nowrap text-[10px]">
                                                         <button
                                                             onClick={() => handleDownloadPDF(s)}
-                                                            className="inline-flex items-center space-x-1 px-2.5 py-1 bg-white border border-red-500 text-red-500 rounded-lg text-[10px] font-bold hover:bg-red-50 transition-all duration-200 shadow-sm"
+                                                            className="inline-flex items-center space-x-1 px-2.5 py-1 bg-red-600 text-white rounded-full text-[10px] font-bold hover:bg-red-700 transition-all duration-200 shadow-sm"
                                                         >
                                                             <FileText className="w-3 h-3" />
                                                             <span>PDF</span>
                                                         </button>
                                                     </td>
-                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px]" style={{ color: textColor }}>{s.fin || '-'}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] text-gray-700">{s.fin ? formatearFechaPeru(s.fin) : '-'}</td>
                                                 </tr>
                                             );
                                         })

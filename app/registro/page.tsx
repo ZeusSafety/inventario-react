@@ -335,7 +335,9 @@ export default function RegistroPage() {
                 month: '2-digit', 
                 year: 'numeric',
                 hour: '2-digit',
-                minute: '2-digit'
+                minute: '2-digit',
+                second: '2-digit',
+                timeZone: 'America/Lima'
             });
         } catch {
             return fecha;
@@ -470,7 +472,7 @@ export default function RegistroPage() {
                                                     }}
                                                 >
                                                     <td className="px-3 py-4 text-xs font-medium text-gray-900">{numeroFila}</td>
-                                                    <td className="px-3 py-4 text-xs text-gray-600 uppercase font-bold text-[#0B3B8C]">{s.almacen}</td>
+                                                <td className="px-3 py-4 text-xs text-gray-600 uppercase font-bold text-[#0B3B8C]">{s.almacen}</td>
                                                     <td className="px-3 py-4 text-xs text-gray-900 font-bold">{s.inventario_numero || s.numero_inventario || '-'}</td>
                                                     <td className="px-3 py-4 text-xs text-gray-600 uppercase">{obtenerTipoConteoTexto(s.tipo_conteo)}</td>
                                                     <td className="px-3 py-4 text-xs text-gray-600 uppercase">{s.nombre_tienda || '-'}</td>
@@ -478,7 +480,7 @@ export default function RegistroPage() {
                                                     <td className="px-3 py-4 text-xs text-gray-600">{formatearFecha(s.fecha_hora_inicio)}</td>
                                                     <td className="px-3 py-4 text-xs text-gray-600">{formatearFecha(s.fecha_hora_final)}</td>
                                                     <td className="px-3 py-4 text-xs text-gray-600">{s.total_productos || 0}</td>
-                                                    <td className="px-3 py-4 text-center">
+                                                <td className="px-3 py-4 text-center">
                                                         {s.archivo_pdf ? (
                                                             <a 
                                                                 href={s.archivo_pdf} 
@@ -491,8 +493,8 @@ export default function RegistroPage() {
                                                         ) : (
                                                             <span className="text-gray-400 text-[10px]">-</span>
                                                         )}
-                                                    </td>
-                                                </tr>
+                                                </td>
+                                            </tr>
                                             );
                                         })
                                     )}

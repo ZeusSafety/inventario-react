@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useInventory } from '@/context/InventoryContext';
 import { BarChart3, RefreshCw, Download, CheckCircle2, AlertTriangle, Info, PackageSearch } from 'lucide-react';
 import { apiCall } from '@/lib/api';
+import * as XLSX from 'xlsx';
 
 interface ConsolidadoItem {
     id: number;
@@ -133,8 +134,12 @@ export default function ConsolidadoPage() {
                         unidad_medida: callaoItem.unidad_medida || 'UNIDAD',
                         total_sistema: totalSistema,
                         total_fisico: totalFisico,
-                        resultado: resultado
-                    });
+                        resultado: resultado,
+                        callao_sistema: callaoSistema,
+                        callao_fisico: callaoFisico,
+                        malvinas_sistema: malvinasSistema,
+                        malvinas_fisico: malvinasFisico
+                    } as any);
                 });
                 
                 // Agregar productos que solo están en Malvinas
@@ -169,8 +174,12 @@ export default function ConsolidadoPage() {
                             unidad_medida: malvinasItem.unidad_medida || 'UNIDAD',
                             total_sistema: totalSistema,
                             total_fisico: totalFisico,
-                            resultado: resultado
-                        });
+                            resultado: resultado,
+                            callao_sistema: 0,
+                            callao_fisico: 0,
+                            malvinas_sistema: malvinasSistema,
+                            malvinas_fisico: malvinasFisico
+                        } as any);
                     }
                 });
                 
@@ -234,9 +243,10 @@ export default function ConsolidadoPage() {
                 // Resetear flag para forzar recarga
                 hasFetchedRef.current = false;
                 // Delay más largo para dar tiempo al backend de regenerar completamente el consolidado
+                // Aumentado a 3000ms para asegurar que el backend termine de regenerar
                 setTimeout(() => {
                     fetchConsolidados();
-                }, 1500);
+                }, 3000);
             }
         };
 
@@ -299,22 +309,75 @@ export default function ConsolidadoPage() {
         if (!inventoryId) return;
 
         try {
-            const data = await apiCall(`exportar_consolidado_excel&inventario_id=${inventoryId}&tipo=${tipo}`);
-
-            if (data.success) {
-                const blob = new Blob([data.content], { type: 'text/csv;charset=utf-8;' });
-                const url = window.URL.createObjectURL(blob);
-                const link = document.createElement('a');
-                link.setAttribute('href', url);
-                link.setAttribute('download', data.filename || `consolidado_${tipo}.csv`);
-                link.style.visibility = 'hidden';
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                showAlert('Éxito', `Archivo ${tipo} exportado con éxito`, 'success');
+            // Obtener datos según el tipo
+            let dataToExport: any[] = [];
+            let sheetName = '';
+            
+            if (tipo === 'general') {
+                dataToExport = generalData;
+                sheetName = 'Conteo General';
+            } else if (tipo === 'callao') {
+                dataToExport = callaoData;
+                sheetName = 'Callao';
             } else {
-                showAlert('Error', data.message || 'Error al exportar los datos', 'error');
+                dataToExport = malvinasData;
+                sheetName = 'Malvinas';
             }
+
+            if (!dataToExport || dataToExport.length === 0) {
+                showAlert('Error', 'No hay datos para exportar', 'error');
+                return;
+            }
+
+            // Preparar datos para Excel
+            let excelData: any[] = [];
+            
+            if (tipo === 'general') {
+                excelData = dataToExport.map(item => ({
+                    'ITEM': item.producto_item || '',
+                    'PRODUCTO': item.producto || '',
+                    'CODIGO': item.codigo || '',
+                    'TOTAL SISTEMA': item.total_sistema || 0,
+                    'TOTAL FISICO': item.total_fisico || 0,
+                    'DIFERENCIA': item.diferencia || 0,
+                    'RESULTADO': item.resultado || '',
+                    'UNIDAD': item.unidad_medida || '',
+                    'CALLAO SISTEMA': (item as any).callao_sistema || 0,
+                    'CALLAO FISICO': (item as any).callao_fisico || 0,
+                    'MALVINAS SISTEMA': (item as any).malvinas_sistema || 0,
+                    'MALVINAS FISICO': (item as any).malvinas_fisico || 0
+                }));
+            } else {
+                excelData = dataToExport.map(item => ({
+                    'ITEM': item.producto_item || '',
+                    'PRODUCTO': item.producto || '',
+                    'CODIGO': item.codigo || '',
+                    'SISTEMA': item.sistema || 0,
+                    'FISICO': item.fisico || 0,
+                    'DIFERENCIA': item.diferencia || 0,
+                    'UNIDAD': item.unidad_medida || ''
+                }));
+            }
+
+            // Crear workbook
+            const wb = XLSX.utils.book_new();
+            const ws = XLSX.utils.json_to_sheet(excelData);
+            
+            // Ajustar ancho de columnas
+            const colWidths = Object.keys(excelData[0] || {}).map(key => ({
+                wch: Math.max(key.length, 15)
+            }));
+            ws['!cols'] = colWidths;
+            
+            // Agregar hoja al workbook
+            XLSX.utils.book_append_sheet(wb, ws, sheetName);
+            
+            // Generar archivo Excel
+            const numeroInventario = state.sesionActual.numero || 'INV';
+            const filename = `consolidado_${tipo}_${numeroInventario}_${new Date().toISOString().split('T')[0]}.xlsx`;
+            XLSX.writeFile(wb, filename);
+            
+            showAlert('Éxito', `Archivo ${tipo} exportado con éxito`, 'success');
         } catch (error) {
             console.error('Error exporting excel:', error);
             showAlert('Error', 'Error al exportar los datos', 'error');
@@ -368,35 +431,20 @@ export default function ConsolidadoPage() {
 
                         <div className="flex items-center gap-3">
                             <button
-                                onClick={handleGenerarConsolidados}
-                                disabled={generating || loading}
-                                className={`flex items-center px-5 py-2.5 rounded-xl font-semibold text-sm transition-all shadow-sm ${generating
-                                    ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                                    : 'bg-[#F4B400] text-[#002D5A] hover:bg-[#e2a600] active:scale-95'
-                                    }`}
+                                onClick={() => handleExportarExcel('general')}
+                                className="flex items-center gap-2 px-4 py-2 bg-[#217346] text-white rounded-full text-xs font-bold hover:bg-[#1a5a37] transition-colors shadow-sm"
                             >
-                                <RefreshCw className={`w-4 h-4 mr-2 ${generating ? 'animate-spin' : ''}`} />
-                                {generating ? 'Procesando...' : 'Generar Consolidados'}
+                                <Download className="w-4 h-4" />
+                                Excel
                             </button>
-
-                            <div className="flex bg-gray-50 p-1 rounded-xl border border-gray-200">
-                                <button
-                                    onClick={() => handleExportarExcel('general')}
-                                    className="p-2 text-gray-600 hover:text-[#198754] hover:bg-white rounded-lg transition-all"
-                                    title="Exportar General"
-                                >
-                                    <Download className="w-5 h-5" />
-                                </button>
-                                <div className="w-px h-6 bg-gray-200 self-center mx-1"></div>
-                                <button
-                                    onClick={handleRefresh}
-                                    disabled={loading}
-                                    className="p-2 text-gray-600 hover:text-[#002D5A] hover:bg-white rounded-lg transition-all"
-                                    title="Actualizar Vista"
-                                >
-                                    <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
-                                </button>
-                            </div>
+                            <button
+                                onClick={handleRefresh}
+                                disabled={loading}
+                                className="flex items-center justify-center px-4 py-2 bg-[#002D5A] text-white rounded-full hover:bg-[#001F3D] transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                                title="Actualizar Vista"
+                            >
+                                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                            </button>
                         </div>
                     </header>
 

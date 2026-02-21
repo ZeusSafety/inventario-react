@@ -176,21 +176,23 @@ export default function Header({ onToggleSidebar, sidebarOpen = true }: HeaderPr
                             </span>
                         </div>
 
-                        {/* Asignar N° Button */}
-                        <button
-                            onClick={() => setShowAsignar(true)}
-                            className="flex items-center gap-2 px-4 py-2 bg-white border border-[#0B3B8C] text-[#0B3B8C] rounded-full btn-oval hover:bg-blue-50 transition-all text-xs font-bold shadow-sm"
-                        >
-                            <ClipboardCheck className="w-4 h-4" />
-                            <span>Asignar N°</span>
-                        </button>
+                        {/* Asignar N° Button - Solo visible cuando NO hay inventario activo */}
+                        {!state.sesionActual.activo && (
+                            <button
+                                onClick={() => setShowAsignar(true)}
+                                className="flex items-center gap-2 px-4 py-2 bg-white text-[#002D5A] border border-blue-300 rounded-full btn-oval hover:bg-blue-50 transition-all text-xs font-bold shadow-sm"
+                            >
+                                <ClipboardCheck className="w-4 h-4 text-[#002D5A]" />
+                                <span>Asignar N°</span>
+                            </button>
+                        )}
 
                         {/* Unirse N° Button */}
                         <button
                             onClick={() => setShowUnirseModal(true)}
-                            className="flex items-center gap-2 px-4 py-2 bg-white border border-[#198754] text-[#198754] rounded-full btn-oval hover:bg-green-50 transition-all text-xs font-bold shadow-sm"
+                            className="flex items-center gap-2 px-4 py-2 bg-white text-green-700 border border-green-300 rounded-full btn-oval hover:bg-green-50 transition-all text-xs font-bold shadow-sm"
                         >
-                            <Link2 className="w-4 h-4" />
+                            <Link2 className="w-4 h-4 text-green-700" />
                             <span>Unirse N°</span>
                         </button>
                     </div>

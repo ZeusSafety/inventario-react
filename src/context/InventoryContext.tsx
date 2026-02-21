@@ -460,14 +460,21 @@ export const useInventory = () => {
 
 // Helpers
 export const fmt12 = (d: Date = new Date()) => {
-    const pad = (n: number) => n.toString().padStart(2, '0');
-    const day = pad(d.getDate());
-    const month = pad(d.getMonth() + 1);
-    const year = d.getFullYear();
-    const h = pad(d.getHours());
-    const m = pad(d.getMinutes());
-    const s = pad(d.getSeconds());
-    return `${day}/${month}/${year} ${h}:${m}:${s}`;
+    // Obtener fecha/hora en zona horaria de Perú (America/Lima)
+    const peruTime = d.toLocaleString('en-US', { 
+        timeZone: 'America/Lima',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+    });
+    // Formato: MM/DD/YYYY, HH:MM:SS -> convertir a DD/MM/YYYY HH:MM:SS
+    const [datePart, timePart] = peruTime.split(', ');
+    const [month, day, year] = datePart.split('/');
+    return `${day}/${month}/${year} ${timePart}`;
 };
 
 export const uid = () => Math.random().toString(36).slice(2, 10);

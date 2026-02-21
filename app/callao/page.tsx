@@ -10,6 +10,26 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 
+// Función helper para formatear fechas a hora de Perú
+const formatearFechaPeru = (fechaStr: string) => {
+    if (!fechaStr) return '-';
+    try {
+        // La fecha viene del backend ya en formato YYYY-MM-DD HH:MM:SS
+        // MySQL con time_zone = '-05:00' ya devuelve en hora de Perú
+        // Solo formatear a DD/MM/YYYY HH:MM:SS
+        const [datePart, timePart] = fechaStr.split(' ');
+        if (!datePart || !timePart) return fechaStr;
+        
+        const [year, month, day] = datePart.split('-');
+        const [hour, minute, second] = timePart.split(':');
+        
+        // Formatear directamente (ya viene en hora de Perú del backend)
+        return `${day}/${month}/${year} ${hour}:${minute}:${second || '00'}`;
+    } catch {
+        return fechaStr;
+    }
+};
+
 export default function CallaoPage() {
     const { state, setState, updateSesionActual, showAlert, showConfirm } = useInventory();
     const [filterText, setFilterText] = useState('');
@@ -23,6 +43,144 @@ export default function CallaoPage() {
     const [isAvisoOpen, setIsAvisoOpen] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [activeSessionCounts, setActiveSessionCounts] = useState<any[]>([]); // Conteos de la sesión activa
+
+    // Función para guardar currentConteo en localStorage (incluyendo filas con cantidades)
+    const guardarCurrentConteo = useCallback((conteo: any) => {
+        if (conteo && typeof window !== 'undefined') {
+            // Guardar información básica + filas con sus cantidades para restauración completa
+            const datosAGuardar = {
+                conteo_id: conteo.conteo_id,
+                tipo: conteo.tipo,
+                numero: conteo.numero,
+                registrado: conteo.registrado,
+                inicio: conteo.inicio,
+                // Guardar solo las filas con sus cantidades (para restauración rápida)
+                filas: conteo.filas ? conteo.filas.map((f: any) => ({
+                    codigo: f.codigo,
+                    cantidad_conteo: f.cantidad_conteo || '',
+                    unidad_medida: f.unidad_medida || 'UNIDAD',
+                    detalle_id: f.detalle_id || f.id
+                })) : []
+            };
+            localStorage.setItem('callao_current_conteo', JSON.stringify(datosAGuardar));
+        }
+    }, []);
+
+    // Función para limpiar currentConteo de localStorage
+    const limpiarCurrentConteo = useCallback(() => {
+        if (typeof window !== 'undefined') {
+            localStorage.removeItem('callao_current_conteo');
+        }
+    }, []);
+
+    // Restaurar currentConteo al cargar la página (solo si no hay uno activo)
+    useEffect(() => {
+        // Solo restaurar si no hay un currentConteo ya cargado
+        if (currentConteo) return;
+
+        const restaurarConteo = async () => {
+            if (!state.sesionActual.inventario_id || !state.sesionActual.activo) {
+                limpiarCurrentConteo();
+                return;
+            }
+
+            // Verificar si hay un conteo guardado en localStorage
+            const savedConteo = typeof window !== 'undefined' 
+                ? localStorage.getItem('callao_current_conteo') 
+                : null;
+
+            if (!savedConteo) return;
+
+            try {
+                const conteoInfo = JSON.parse(savedConteo);
+                
+                // Verificar que el conteo guardado corresponde al inventario actual
+                if (conteoInfo.numero !== state.sesionActual.numero) {
+                    limpiarCurrentConteo();
+                    return;
+                }
+
+                // Verificar en el servidor si el conteo sigue en proceso
+                const response = await apiCall(`listar_conteos_callao&inventario_id=${state.sesionActual.inventario_id}`, 'GET');
+                if (response.success) {
+                    const tipoConteo = conteoInfo.tipo === 'cajas' ? 'por_cajas' : 'por_stand';
+                    const conteoEnServidor = [
+                        ...(response.conteos_por_cajas || []),
+                        ...(response.conteos_por_stand || [])
+                    ].find((c: any) => 
+                        c.id === conteoInfo.conteo_id && 
+                        c.tipo_conteo === tipoConteo &&
+                        c.estado === 'en_proceso'
+                    );
+
+                    if (conteoEnServidor) {
+                        // Cargar los detalles del conteo desde el servidor
+                        const detailRes = await apiCall(`obtener_detalle_conteo&conteo_id=${conteoInfo.conteo_id}`, 'GET');
+                        if (detailRes.success && detailRes.productos) {
+                            // Crear un mapa de las filas guardadas en localStorage (si existen)
+                            const filasGuardadasMap = new Map();
+                            if (conteoInfo.filas && Array.isArray(conteoInfo.filas)) {
+                                conteoInfo.filas.forEach((f: any) => {
+                                    if (f.codigo) {
+                                        filasGuardadasMap.set(String(f.codigo).trim().toUpperCase(), f);
+                                    }
+                                });
+                            }
+
+                            const filas = detailRes.productos.map((p: any) => {
+                                // El backend devuelve 'cantidad' que es la cantidad física guardada
+                                const cantidadGuardada = p.cantidad;
+                                
+                                // Buscar si hay datos guardados localmente para este producto
+                                const codigoNormalizado = String(p.codigo || '').trim().toUpperCase();
+                                const filaGuardada = filasGuardadasMap.get(codigoNormalizado);
+                                
+                                // Prioridad: 1) Datos guardados localmente (más recientes), 2) Datos del servidor, 3) Vacío
+                                let cantidadParaMostrar = '';
+                                if (filaGuardada && filaGuardada.cantidad_conteo && filaGuardada.cantidad_conteo !== '') {
+                                    cantidadParaMostrar = String(filaGuardada.cantidad_conteo);
+                                } else if (cantidadGuardada && Number(cantidadGuardada) > 0) {
+                                    cantidadParaMostrar = String(cantidadGuardada);
+                                }
+                                
+                                return {
+                                    ...p,
+                                    cantidad_conteo: cantidadParaMostrar,
+                                    unidad_medida: filaGuardada?.unidad_medida || p.unidad_medida || 'UNIDAD',
+                                    // Asegurar que tenemos el item correcto
+                                    item: p.item || p.item_producto
+                                };
+                            });
+
+                            const conteoRestaurado = {
+                                ...conteoInfo,
+                                filas: filas
+                            };
+                            setCurrentConteo(conteoRestaurado);
+                            guardarCurrentConteo(conteoRestaurado);
+                            setShowTable(true);
+                            const productosConCantidad = filas.filter((f: any) => f.cantidad_conteo !== '').length;
+                            console.log('✅ Conteo restaurado desde servidor:', conteoInfo.conteo_id, 'con', productosConCantidad, 'productos con cantidad');
+                        }
+                    } else {
+                        // El conteo ya no está en proceso, limpiar localStorage
+                        limpiarCurrentConteo();
+                    }
+                }
+            } catch (e) {
+                console.error('Error restaurando conteo:', e);
+                limpiarCurrentConteo();
+            }
+        };
+
+        // Esperar un momento para que el estado se sincronice
+        const timer = setTimeout(() => {
+            restaurarConteo();
+        }, 1000);
+
+        return () => clearTimeout(timer);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [state.sesionActual.inventario_id, state.sesionActual.numero, state.sesionActual.activo]);
 
     const checkExistingCount = async (tipo: 'cajas' | 'stand') => {
         // 1. Verificar primero en el estado local (sincronizado por polling)
@@ -82,7 +240,7 @@ export default function CallaoPage() {
                     response.conteos_por_cajas.forEach((c: any) => {
                         allSessions.push({
                             id: c.id,
-                            numero: c.numero_inventario || c.inventario_numero,
+                            numero: c.inventario_numero || c.numero_inventario,
                             registrado: c.registrado_por,
                             inicio: c.fecha_hora_inicio,
                             fin: c.fecha_hora_final,
@@ -97,7 +255,7 @@ export default function CallaoPage() {
                     response.conteos_por_stand.forEach((c: any) => {
                         allSessions.push({
                             id: c.id,
-                            numero: c.numero_inventario || c.inventario_numero,
+                            numero: c.inventario_numero || c.numero_inventario,
                             registrado: c.registrado_por,
                             inicio: c.fecha_hora_inicio,
                             fin: c.fecha_hora_final,
@@ -120,54 +278,58 @@ export default function CallaoPage() {
                     allSessions.forEach((s: any) => todosIds.add(s.id));
                     setConteosAnterioresIds(todosIds);
                 } else {
-                    // Cargas posteriores: detectar conteos nuevos
-                    nuevosIds = new Set<number>();
-                    const nuevosConteos: any[] = [];
-                    
-                    allSessions.forEach((s: any) => {
-                        if (!conteosAnterioresIds.has(s.id)) {
-                            nuevosIds.add(s.id);
-                            nuevosConteos.push(s);
-                        }
-                    });
-                    
-                    // Si hay conteos nuevos, agregarlos al set de nuevos conteos y mostrar notificación
-                    if (nuevosIds.size > 0) {
-                        setNuevosConteosIds(prev => {
-                            const nuevoSet = new Set(prev);
-                            nuevosIds.forEach(id => nuevoSet.add(id));
-                            return nuevoSet;
+                    // Solo detectar y mostrar notificaciones de conteos nuevos cuando estás en la página 1
+                    // Si cambias de página, no mostrar notificaciones (solo actualizar el set)
+                    if (page === 1) {
+                        // Cargas posteriores en página 1: detectar conteos nuevos
+                        nuevosIds = new Set<number>();
+                        const nuevosConteos: any[] = [];
+                        
+                        allSessions.forEach((s: any) => {
+                            if (!conteosAnterioresIds.has(s.id)) {
+                                nuevosIds.add(s.id);
+                                nuevosConteos.push(s);
+                            }
                         });
                         
-                        // Mostrar notificación profesional
-                        if (nuevosConteos.length === 1) {
-                            const conteo = nuevosConteos[0];
-                            showAlert(
-                                'Nuevo Conteo Registrado',
-                                `Se registró un conteo de tipo "${conteo.tipo === 'cajas' ? 'Cajas' : 'Stand'}" para el inventario "${conteo.numero}" por ${conteo.registrado}`,
-                                'success'
-                            );
-                        } else {
-                            showAlert(
-                                'Nuevos Conteos Registrados',
-                                `Se registraron ${nuevosConteos.length} nuevos conteos`,
-                                'success'
-                            );
+                        // Si hay conteos nuevos, agregarlos al set de nuevos conteos y mostrar notificación
+                        if (nuevosIds.size > 0) {
+                            setNuevosConteosIds(prev => {
+                                const nuevoSet = new Set(prev);
+                                nuevosIds.forEach(id => nuevoSet.add(id));
+                                return nuevoSet;
+                            });
+                            
+                            // Mostrar notificación profesional
+                            if (nuevosConteos.length === 1) {
+                                const conteo = nuevosConteos[0];
+                                showAlert(
+                                    'Nuevo Conteo Registrado',
+                                    `Se registró un conteo de tipo "${conteo.tipo === 'cajas' ? 'Cajas' : 'Stand'}" para el inventario "${conteo.numero}" por ${conteo.registrado}`,
+                                    'success'
+                                );
+                            } else {
+                                showAlert(
+                                    'Nuevos Conteos Registrados',
+                                    `Se registraron ${nuevosConteos.length} nuevos conteos`,
+                                    'success'
+                                );
+                            }
+                            
+                            // Remover la animación después de 3 segundos
+                            nuevosIds.forEach(id => {
+                                setTimeout(() => {
+                                    setNuevosConteosIds(prev => {
+                                        const nuevoSet = new Set(prev);
+                                        nuevoSet.delete(id);
+                                        return nuevoSet;
+                                    });
+                                }, 3000);
+                            });
                         }
-                        
-                        // Remover la animación después de 3 segundos
-                        nuevosIds.forEach(id => {
-                            setTimeout(() => {
-                                setNuevosConteosIds(prev => {
-                                    const nuevoSet = new Set(prev);
-                                    nuevoSet.delete(id);
-                                    return nuevoSet;
-                                });
-                            }, 3000);
-                        });
                     }
                     
-                    // Actualizar el set global de IDs vistos (acumulativo)
+                    // Actualizar el set global de IDs vistos (acumulativo) - siempre, sin importar la página
                     setConteosAnterioresIds(prev => {
                         const nuevoSet = new Set(prev);
                         allSessions.forEach((s: any) => nuevoSet.add(s.id));
@@ -175,21 +337,9 @@ export default function CallaoPage() {
                     });
                 }
                 
-                // Ordenar: primero los nuevos, luego por número de inventario
-                const idsNuevosParaOrdenar = nuevosIds;
-                const sesionesOrdenadas = [...allSessions].sort((a, b) => {
-                    const aEsNuevo = idsNuevosParaOrdenar.has(a.id);
-                    const bEsNuevo = idsNuevosParaOrdenar.has(b.id);
-                    
-                    // Si uno es nuevo y el otro no, el nuevo va primero
-                    if (aEsNuevo && !bEsNuevo) return -1;
-                    if (!aEsNuevo && bEsNuevo) return 1;
-                    
-                    // Si ambos son nuevos o ambos no son nuevos, ordenar por número de inventario
-                    const numA = (a.numero || '').toUpperCase();
-                    const numB = (b.numero || '').toUpperCase();
-                    return numA.localeCompare(numB);
-                });
+                // El backend ya ordena por ID DESC (más reciente primero), mantener ese orden
+                // No reordenar en el frontend para preservar el orden del backend
+                const sesionesOrdenadas = allSessions;
                 
                 setState((prev: any) => ({
                     ...prev,
@@ -363,11 +513,13 @@ export default function CallaoPage() {
             }
         }
 
-        setCurrentConteo({
+        const nuevoConteo = {
             ...data,
             conteo_id: cid,
             filas: rowsWithIds
-        });
+        };
+        setCurrentConteo(nuevoConteo);
+        guardarCurrentConteo(nuevoConteo);
         setIsIniciarOpen(false);
         setIsAvisoOpen(true);
     };
@@ -411,7 +563,9 @@ export default function CallaoPage() {
         const nuevasFilas = currentConteo.filas.map((f: any) =>
             f.codigo === codigo ? { ...f, cantidad_conteo: valor } : f
         );
-        setCurrentConteo({ ...currentConteo, filas: nuevasFilas });
+        const conteoActualizado = { ...currentConteo, filas: nuevasFilas };
+        setCurrentConteo(conteoActualizado);
+        guardarCurrentConteo(conteoActualizado);
     };
 
     const handleUpdateUnidad = (codigo: string, valor: string) => {
@@ -419,7 +573,9 @@ export default function CallaoPage() {
         const nuevasFilas = currentConteo.filas.map((f: any) =>
             f.codigo === codigo ? { ...f, unidad_medida: valor } : f
         );
-        setCurrentConteo({ ...currentConteo, filas: nuevasFilas });
+        const conteoActualizado = { ...currentConteo, filas: nuevasFilas };
+        setCurrentConteo(conteoActualizado);
+        guardarCurrentConteo(conteoActualizado);
     };
 
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -437,26 +593,80 @@ export default function CallaoPage() {
                 const wb = XLSX.read(bstr, { type: 'binary' });
                 const wsname = wb.SheetNames[0];
                 const ws = wb.Sheets[wsname];
-                const data = XLSX.utils.sheet_to_json(ws);
+                
+                // Leer como array de arrays para acceder por posición de columna
+                const dataArray = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) as any[][];
+                
+                if (dataArray.length === 0) {
+                    showAlert('Error', 'El archivo Excel está vacío.', 'error');
+                    return;
+                }
 
-                // OPTIMIZACIÓN: Crear mapa del Excel por código (O(n)) en lugar de buscar en cada iteración
+                // Encontrar índices de columnas: B=1 (código), N=13 (cantidad)
+                // Primero intentar por posición, luego por nombre como fallback
+                let codigoColIndex = 1; // Columna B (índice 1)
+                let cantidadColIndex = 13; // Columna N (índice 13)
+                
+                // Verificar si hay encabezados en la primera fila
+                const headerRow = dataArray[0] || [];
+                let foundCodigoByPosition = false;
+                let foundCantidadByPosition = false;
+
+                // Verificar si la columna B tiene datos (código)
+                if (headerRow.length > codigoColIndex && headerRow[codigoColIndex]) {
+                    foundCodigoByPosition = true;
+                } else {
+                    // Buscar por nombre como fallback
+                    const codigoHeader = headerRow.findIndex((h: any) => {
+                        const hStr = String(h || '').toLowerCase().trim();
+                        return hStr.includes('codigo') || hStr.includes('código') || hStr.includes('cod');
+                    });
+                    if (codigoHeader >= 0) {
+                        codigoColIndex = codigoHeader;
+                        foundCodigoByPosition = true;
+                    }
+                }
+
+                // Verificar si la columna N tiene datos (cantidad)
+                if (headerRow.length > cantidadColIndex && headerRow[cantidadColIndex]) {
+                    foundCantidadByPosition = true;
+                } else {
+                    // Buscar por nombre SOLO si no hay columna N (fallback)
+                    const cantidadHeader = headerRow.findIndex((h: any) => {
+                        const hStr = String(h || '').toLowerCase().trim();
+                        return hStr.includes('cantidad') || hStr.includes('cant') || hStr.includes('conteo');
+                    });
+                    if (cantidadHeader >= 0) {
+                        cantidadColIndex = cantidadHeader;
+                        foundCantidadByPosition = true;
+                    }
+                }
+
+                if (!foundCodigoByPosition) {
+                    showAlert('Error', 'No se encontró la columna "Código" (B) en el archivo Excel.', 'error');
+                    return;
+                }
+
+                if (!foundCantidadByPosition) {
+                    showAlert('Error', 'No se encontró la columna "Cantidad" (N) en el archivo Excel.', 'error');
+                    return;
+                }
+
+                // Crear mapa: código -> cantidad (usando posición de columnas)
                 const excelMap = new Map<string, any>();
                 
-                // Encontrar las columnas una sola vez
-                if (data.length > 0) {
-                    const firstRow = data[0] as Record<string, any>;
-                    const keys = Object.keys(firstRow);
-                    const codigoKey = keys.find(k => k.toLowerCase().includes('codigo') || k.toLowerCase().includes('código'));
-                    const cantKey = keys.find(k => k.toLowerCase().includes('cantidad') || k.toLowerCase().includes('cant') || k.toLowerCase().includes('conteo'));
+                // Empezar desde la fila 1 (saltar encabezados si existen)
+                const startRow = headerRow.some((h: any) => String(h || '').toLowerCase().includes('codigo') || String(h || '').toLowerCase().includes('cantidad')) ? 1 : 0;
+                
+                for (let i = startRow; i < dataArray.length; i++) {
+                    const row = dataArray[i];
+                    if (!row || row.length === 0) continue;
                     
-                    if (codigoKey && cantKey) {
-                        // Crear mapa: código -> cantidad
-                        data.forEach((row: any) => {
-                            const codigo = String(row[codigoKey] || '').trim().toUpperCase();
-                            if (codigo) {
-                                excelMap.set(codigo, row[cantKey]);
-                            }
-                        });
+                    const codigo = String(row[codigoColIndex] || '').trim().toUpperCase();
+                    const cantidad = row[cantidadColIndex];
+                    
+                    if (codigo && cantidad !== undefined && cantidad !== null && cantidad !== '') {
+                        excelMap.set(codigo, cantidad);
                     }
                 }
 
@@ -466,7 +676,7 @@ export default function CallaoPage() {
                     const codigoNormalizado = String(fila.codigo || '').trim().toUpperCase();
                     const cantidadExcel = excelMap.get(codigoNormalizado);
                     
-                    if (cantidadExcel !== undefined && cantidadExcel !== null) {
+                    if (cantidadExcel !== undefined && cantidadExcel !== null && cantidadExcel !== '') {
                         updatedCount++;
                         return { ...fila, cantidad_conteo: String(cantidadExcel) };
                     }
@@ -474,7 +684,9 @@ export default function CallaoPage() {
                 });
 
                 if (updatedCount > 0) {
-                    setCurrentConteo({ ...currentConteo, filas: newFilas });
+                    const conteoActualizado = { ...currentConteo, filas: newFilas };
+                    setCurrentConteo(conteoActualizado);
+                    guardarCurrentConteo(conteoActualizado);
                     setShowTable(true);
                     showAlert('Carga Exitosa', `Se actualizaron ${updatedCount} productos desde el archivo.`, 'success');
                 } else {
@@ -573,6 +785,7 @@ export default function CallaoPage() {
 
             setCurrentConteo(null);
             setShowTable(false);
+            limpiarCurrentConteo();
             // cargarSesionesAPI(); // Se comenta para mantener el update optimista
         } catch (e) {
             console.error(e);
@@ -591,10 +804,10 @@ export default function CallaoPage() {
                 const response = await apiCall(`obtener_detalle_conteo&conteo_id=${sesion.id}`, 'GET');
                 if (response.success && response.productos) {
                     filas = response.productos.map((p: any) => ({
-                        item: p.item,
+                        item: p.item_producto || p.item,
                         producto: p.producto,
                         codigo: p.codigo,
-                        cantidad: p.cantidad_fisica,
+                        cantidad: p.cantidad || p.cantidad_fisica || 0,
                         unidad_medida: p.unidad_medida
                     }));
                 }
@@ -936,7 +1149,7 @@ export default function CallaoPage() {
                             <div className="relative">
                                 <input
                                     type="text"
-                                    className="bg-white border-2 border-gray-200 text-sm rounded-xl block w-64 pl-10 p-2.5 focus:border-[#0B3B8C] outline-none transition-all shadow-sm"
+                                    className="bg-white border-2 border-gray-200 text-sm rounded-xl block w-96 pl-10 p-2.5 focus:border-[#0B3B8C] outline-none transition-all shadow-sm"
                                     placeholder="Buscar..."
                                     value={filterText}
                                     onChange={(e) => setFilterText(e.target.value)}
@@ -945,7 +1158,7 @@ export default function CallaoPage() {
                             </div>
                             <button
                                 onClick={handleGenerateReport}
-                                className="bg-white border-2 border-[#0B3B8C] text-[#0B3B8C] font-bold px-6 py-2 rounded-full btn-oval flex items-center gap-2 hover:bg-blue-50 transition-colors text-sm shadow-sm"
+                                className="bg-[#002D5A] text-white font-bold px-6 py-2.5 rounded-full flex items-center gap-2 hover:bg-[#001F3D] transition-colors text-sm shadow-sm"
                             >
                                 <FileText className="w-4 h-4" />
                                 <span>Generar reporte</span>
@@ -976,22 +1189,6 @@ export default function CallaoPage() {
                                         </tr>
                                     ) : (
                                         state.sesiones.callao.map((s: any, idx: number) => {
-                                            // Generar color único basado en el usuario
-                                            const getUserColor = (usuario: string) => {
-                                                const hash = usuario.split('').reduce((acc, char) => char.charCodeAt(0) + ((acc << 5) - acc), 0);
-                                                const hue = Math.abs(hash % 360);
-                                                return `hsl(${hue}, 70%, 95%)`; // Color de fondo pastel
-                                            };
-
-                                            const getUserTextColor = (usuario: string) => {
-                                                const hash = usuario.split('').reduce((acc, char) => char.charCodeAt(0) + ((acc << 5) - acc), 0);
-                                                const hue = Math.abs(hash % 360);
-                                                return `hsl(${hue}, 70%, 35%)`; // Color de texto oscuro
-                                            };
-
-                                            const bgColor = getUserColor(s.registrado || '');
-                                            const textColor = getUserTextColor(s.registrado || '');
-
                                             const esNuevo = nuevosConteosIds.has(s.id);
                                             
                                             return (
@@ -1001,24 +1198,24 @@ export default function CallaoPage() {
                                                         esNuevo ? 'animate-pulse-new' : ''
                                                     }`}
                                                     style={{ 
-                                                        backgroundColor: esNuevo ? `rgba(11, 59, 140, 0.08)` : bgColor
+                                                        backgroundColor: esNuevo ? `rgba(11, 59, 140, 0.08)` : 'white'
                                                     }}
                                                 >
-                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] font-medium" style={{ color: textColor }}>{idx + 1}</td>
-                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px]" style={{ color: textColor }}>{s.inicio}</td>
-                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px]" style={{ color: textColor }}>{s.numero}</td>
-                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] font-bold uppercase" style={{ color: textColor }}>{s.tipo}</td>
-                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] font-bold" style={{ color: textColor }}>{s.registrado}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] font-medium text-gray-700">{(pageCallao - 1) * 10 + idx + 1}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] text-gray-700">{formatearFechaPeru(s.inicio)}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] text-gray-700">{s.numero}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] font-bold uppercase text-gray-700">{s.tipo}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] font-bold text-gray-700">{s.registrado}</td>
                                                     <td className="px-4 py-3 whitespace-nowrap text-[10px]">
                                                         <button
                                                             onClick={() => handleDownloadPDF(s)}
-                                                            className="inline-flex items-center space-x-1 px-2.5 py-1 bg-white border border-red-500 text-red-500 rounded-lg text-[10px] font-bold hover:bg-red-50 transition-all duration-200 shadow-sm"
+                                                            className="inline-flex items-center space-x-1 px-2.5 py-1 bg-red-600 text-white rounded-full text-[10px] font-bold hover:bg-red-700 transition-all duration-200 shadow-sm"
                                                         >
                                                             <FileText className="w-3 h-3" />
                                                             <span>PDF</span>
                                                         </button>
                                                     </td>
-                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px]" style={{ color: textColor }}>{s.fin || '-'}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] text-gray-700">{s.fin ? formatearFechaPeru(s.fin) : '-'}</td>
                                                 </tr>
                                             );
                                         })

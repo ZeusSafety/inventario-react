@@ -15,13 +15,18 @@ from datetime import datetime
 
 # 🔧 Conexión a MySQL
 def get_connection():
-    return pymysql.connect(
+    conn = pymysql.connect(
         user="zeussafety-2024",
         password="ZeusSafety2025",
         db="Zeus_Safety_Data_Integration",
         unix_socket="/cloudsql/stable-smithy-435414-m6:us-central1:zeussafety-2024",
         cursorclass=pymysql.cursors.DictCursor
     )
+    # Configurar timezone a Perú (America/Lima)
+    cursor = conn.cursor()
+    cursor.execute("SET time_zone = '-05:00'")  # UTC-5 para Perú
+    cursor.close()
+    return conn
 
 ## Función de Subida a Cloud Storage (LOCAL STORAGE)
 # Variables globales para el cliente y el bucket de GCS
@@ -464,37 +469,77 @@ def cargar_excel_emergencia(request):
         if excel_data is None or excel_data.empty:
             return {'success': False, 'message': 'El archivo Excel está vacío o no se pudo leer'}
         
-        # Normalizar nombres de columnas (convertir a mayúsculas y eliminar espacios extra)
-        excel_data.columns = excel_data.columns.str.strip().str.upper()
+        # Leer columnas específicas por posición según especificación:
+        # Columna A (índice 0): Nombre
+        # Columna B (índice 1): Código
+        # Columna E (índice 4): Código Unidad
+        # Columna N (índice 13): Cantidad
         
-        # Mapear columnas posibles (aceptar diferentes nombres)
-        column_mapping = {
-            'CODIGO': ['CODIGO', 'CÓDIGO', 'COD'],
-            'CANTIDAD': ['CANTIDAD', 'CANT', 'QTY'],
-            'UNIDAD_MEDIDA': ['UNIDAD DE MEDIDA', 'UNIDAD_MEDIDA', 'UNIDAD', 'UNIDAD DE MED', 'CÓDIGO UNIDAD']
-        }
+        # Normalizar nombres de columnas
+        excel_data.columns = excel_data.columns.str.strip()
         
-        # Buscar las columnas correctas
+        # IMPORTANTE: Usar posición PRIMERO para evitar confusión con otras columnas "Cantidad"
+        # Esto es igual que en cargar_sistema_callao/malvinas que funciona bien
+        nombre_col = None
         codigo_col = None
-        cantidad_col = None
         unidad_col = None
+        cantidad_col = None
         
-        for col in excel_data.columns:
-            col_upper = col.upper().strip()
-            if col_upper in column_mapping['CODIGO']:
-                codigo_col = col
-            elif col_upper in column_mapping['CANTIDAD']:
-                cantidad_col = col
-            elif col_upper in column_mapping['UNIDAD_MEDIDA']:
-                unidad_col = col
+        # Usar posición primero (igual que cargar_sistema_callao)
+        if len(excel_data.columns) > 0:
+            nombre_col = excel_data.columns[0]  # Columna A
+        if len(excel_data.columns) > 1:
+            codigo_col = excel_data.columns[1]  # Columna B
+        if len(excel_data.columns) > 4:
+            unidad_col = excel_data.columns[4]  # Columna E
+        if len(excel_data.columns) > 13:
+            cantidad_col = excel_data.columns[13]  # Columna N (SIEMPRE esta)
+            logging.info(f"[cargar_excel_emergencia] Usando columna N (índice 13) para cantidad: '{cantidad_col}'")
         
-        # Verificar que se encontraron las columnas necesarias
+        # Si no se encontraron por posición, buscar por nombre como fallback
+        if not nombre_col:
+            for col in excel_data.columns:
+                col_upper = col.upper().strip()
+                if col_upper in ['NOMBRE', 'PRODUCTO', 'NOMBRE PRODUCTO']:
+                    nombre_col = col
+                    break
         if not codigo_col:
-            return {'success': False, 'message': f'No se encontró la columna CODIGO. Columnas disponibles: {", ".join(excel_data.columns.tolist())}'}
-        if not cantidad_col:
-            return {'success': False, 'message': f'No se encontró la columna CANTIDAD. Columnas disponibles: {", ".join(excel_data.columns.tolist())}'}
+            for col in excel_data.columns:
+                col_upper = col.upper().strip()
+                if col_upper in ['CÓDIGO', 'CODIGO', 'CÓD', 'COD']:
+                    codigo_col = col
+                    break
         if not unidad_col:
-            return {'success': False, 'message': f'No se encontró la columna UNIDAD DE MEDIDA. Columnas disponibles: {", ".join(excel_data.columns.tolist())}'}
+            for col in excel_data.columns:
+                col_upper = col.upper().strip()
+                if col_upper in ['CÓDIGO UNIDAD', 'CODIGO UNIDAD', 'UNIDAD', 'CÓDIGO UNIDADES']:
+                    unidad_col = col
+                    break
+        if not cantidad_col:
+            # Fallback: buscar por nombre solo si no hay columna N
+            for col in excel_data.columns:
+                col_upper = col.upper().strip()
+                if col_upper in ['CANTIDAD', 'CANT', 'QTY']:
+                    cantidad_col = col
+                    logging.warning(f"[cargar_excel_emergencia] Columna N no encontrada, usando por nombre: '{cantidad_col}'")
+                    break
+        
+        # Validar que se encontraron las columnas necesarias
+        if not codigo_col:
+            return {
+                'success': False,
+                'message': f'Columna "Código" (B) no encontrada. Columnas disponibles: {", ".join(excel_data.columns.tolist())}'
+            }
+        if not cantidad_col:
+            return {
+                'success': False,
+                'message': f'Columna "Cantidad" (N) no encontrada. Columnas disponibles: {", ".join(excel_data.columns.tolist())}'
+            }
+        if not unidad_col:
+            return {
+                'success': False,
+                'message': f'Columna "Código Unidad" (E) no encontrada. Columnas disponibles: {", ".join(excel_data.columns.tolist())}'
+            }
         
         # Procesar datos del Excel
         conn = get_connection()
@@ -550,7 +595,20 @@ def cargar_excel_emergencia(request):
                     logging.warning(f"[cargar_excel_emergencia] Error al convertir cantidad para código {codigo}: {cantidad_raw}, usando 0")
                     cantidad = 0
                 
-                unidad = str(row[unidad_col]).strip() if pd.notna(row[unidad_col]) else ''
+                # Obtener unidad de medida del Excel y convertir según especificación:
+                # NIU → UNIDAD
+                # DC, DZN → DOCENAS
+                # DZP → DECENEAS
+                unidad_excel_raw = str(row[unidad_col]).strip().upper() if pd.notna(row[unidad_col]) else ''
+                if unidad_excel_raw == 'NIU':
+                    unidad = 'UNIDAD'
+                elif unidad_excel_raw in ['DC', 'DZN']:
+                    unidad = 'DOCENAS'
+                elif unidad_excel_raw == 'DZP':
+                    unidad = 'DECENEAS'
+                else:
+                    # Por defecto, usar UNIDAD si no coincide
+                    unidad = 'UNIDAD'
                 
                 if codigo:  # Solo insertar si hay código
                     cursor.execute(
@@ -558,7 +616,7 @@ def cargar_excel_emergencia(request):
                         (codigo, cantidad, unidad)
                     )
                     registros_insertados += 1
-                    logging.debug(f"[cargar_excel_emergencia] Insertado en tmp: codigo={codigo}, cantidad={cantidad}, unidad={unidad}")
+                    logging.debug(f"[cargar_excel_emergencia] Insertado en tmp: codigo={codigo}, cantidad={cantidad}, unidad={unidad} (desde Excel: {unidad_excel_raw})")
             except Exception as e:
                 logging.warning(f"[cargar_excel_emergencia] Error al procesar fila del Excel: {str(e)}")
                 continue
@@ -1090,20 +1148,20 @@ def actualizar_masivo_productos(data):
             if cursor.rowcount > 0:
                 registros_actualizados += 1
                 
-                # Acumular auditorías para insertar en batch
-                if str(nueva_cantidad) != str(producto_actual['cantidad']):
-                    auditorias.append((
-                        detalle_id, conteo_id, 'cantidad',
-                        str(producto_actual['cantidad']), str(nueva_cantidad),
-                        'masiva', usuario
-                    ))
-                
-                if nueva_unidad != producto_actual['unidad_medida']:
-                    auditorias.append((
-                        detalle_id, conteo_id, 'unidad_medida',
-                        producto_actual['unidad_medida'], nueva_unidad,
-                        'masiva', usuario
-                    ))
+            # Acumular auditorías para insertar en batch
+            if str(nueva_cantidad) != str(producto_actual['cantidad']):
+                auditorias.append((
+                    detalle_id, conteo_id, 'cantidad',
+                    str(producto_actual['cantidad']), str(nueva_cantidad),
+                    'masiva', usuario
+                ))
+            
+            if nueva_unidad != producto_actual['unidad_medida']:
+                auditorias.append((
+                    detalle_id, conteo_id, 'unidad_medida',
+                    producto_actual['unidad_medida'], nueva_unidad,
+                    'masiva', usuario
+                ))
         
         # OPTIMIZACIÓN: Insertar todas las auditorías en batch
         if auditorias:
@@ -1790,29 +1848,29 @@ def listar_conteos_malvinas(inventario_id):
         # OPTIMIZACIÓN: Obtener todos los conteos de una vez en lugar de por tienda
         # Primero obtener todos los conteos con sus estadísticas
         cursor.execute("""
-            SELECT 
-                c.id,
-                c.numero_inventario,
-                c.registrado_por,
-                c.tipo_conteo,
-                DATE_FORMAT(c.fecha_hora_inicio, '%%Y-%%m-%%d %%H:%%i:%%s') as fecha_hora_inicio,
-                DATE_FORMAT(c.fecha_hora_final, '%%Y-%%m-%%d %%H:%%i:%%s') as fecha_hora_final,
-                c.archivo_pdf,
-                c.estado,
-                c.origen_datos,
+                SELECT 
+                    c.id,
+                    c.numero_inventario,
+                    c.registrado_por,
+                    c.tipo_conteo,
+                    DATE_FORMAT(c.fecha_hora_inicio, '%%Y-%%m-%%d %%H:%%i:%%s') as fecha_hora_inicio,
+                    DATE_FORMAT(c.fecha_hora_final, '%%Y-%%m-%%d %%H:%%i:%%s') as fecha_hora_final,
+                    c.archivo_pdf,
+                    c.estado,
+                    c.origen_datos,
                 c.tienda_id,
-                t.nombre_tienda,
+                    t.nombre_tienda,
                 (SELECT COUNT(*) FROM detalle_conteo WHERE conteo_id = c.id) as total_productos,
                 (SELECT COALESCE(SUM(cantidad), 0) FROM detalle_conteo WHERE conteo_id = c.id) as cantidad_total
-            FROM conteos c
-            LEFT JOIN tiendas t ON c.tienda_id = t.id
-            WHERE c.inventario_id = %s 
-                AND c.almacen_id = %s
+                FROM conteos c
+                LEFT JOIN tiendas t ON c.tienda_id = t.id
+                WHERE c.inventario_id = %s 
+                    AND c.almacen_id = %s 
             ORDER BY c.tienda_id, c.tipo_conteo, c.fecha_hora_inicio DESC
         """, (inventario_id, almacen_id))
-        
+            
         todos_conteos = cursor.fetchall()
-        
+            
         # Agrupar por tienda y tipo
         for tienda in tiendas:
             tienda_id = tienda['id']
@@ -1917,7 +1975,7 @@ def obtener_historial_conteos_callao(page=1, per_page=10):
             GROUP BY c.id, c.numero_inventario, c.registrado_por, c.tipo_conteo,
                      c.fecha_hora_inicio, c.fecha_hora_final, c.archivo_pdf,
                      c.estado, c.origen_datos, c.inventario_id, i.numero_inventario
-            ORDER BY c.fecha_hora_final DESC
+            ORDER BY c.id DESC
             LIMIT %s OFFSET %s
         """, (almacen_id, per_page, offset))
         
@@ -2021,7 +2079,7 @@ def obtener_historial_conteos_malvinas(page=1, per_page=10):
                      c.fecha_hora_inicio, c.fecha_hora_final, c.archivo_pdf,
                      c.estado, c.origen_datos, c.inventario_id, i.numero_inventario,
                      c.tienda_id, t.nombre_tienda
-            ORDER BY c.fecha_hora_final DESC
+            ORDER BY c.id DESC
             LIMIT %s OFFSET %s
         """, (almacen_id, per_page, offset))
         
@@ -2281,11 +2339,14 @@ def cargar_sistema_callao(request):
                 
                 # Convertir unidad de medida según especificación:
                 # NIU → UNIDAD
-                # DC, DZN, DZP → DOCENAS
+                # DC, DZN → DOCENAS
+                # DZP → DECENEAS
                 if unidad_excel_raw == 'NIU':
                     unidad_sistema = 'UNIDAD'
-                elif unidad_excel_raw in ['DC', 'DZN', 'DZP']:
+                elif unidad_excel_raw in ['DC', 'DZN']:
                     unidad_sistema = 'DOCENAS'
+                elif unidad_excel_raw == 'DZP':
+                    unidad_sistema = 'DECENEAS'
                 else:
                     # Por defecto, usar UNIDAD si no coincide
                     unidad_sistema = 'UNIDAD'
@@ -2523,11 +2584,14 @@ def cargar_sistema_malvinas(request):
                 
                 # Convertir unidad de medida según especificación:
                 # NIU → UNIDAD
-                # DC, DZN, DZP → DOCENAS
+                # DC, DZN → DOCENAS
+                # DZP → DECENEAS
                 if unidad_excel_raw == 'NIU':
                     unidad_sistema = 'UNIDAD'
-                elif unidad_excel_raw in ['DC', 'DZN', 'DZP']:
+                elif unidad_excel_raw in ['DC', 'DZN']:
                     unidad_sistema = 'DOCENAS'
+                elif unidad_excel_raw == 'DZP':
+                    unidad_sistema = 'DECENEAS'
                 else:
                     # Por defecto, usar UNIDAD si no coincide
                     unidad_sistema = 'UNIDAD'
@@ -3494,6 +3558,9 @@ def editar_cantidad_fisica(data):
             observaciones
         ))
         
+        # Obtener el ID de la edición recién insertada
+        edicion_id = cursor.lastrowid
+        
         # Registrar en historial
         cursor.execute("""
             INSERT INTO historial_acciones_comparacion (
@@ -3515,7 +3582,9 @@ def editar_cantidad_fisica(data):
             json.dumps({
                 'cantidad_anterior': cantidad_anterior,
                 'cantidad_nueva': nueva_cantidad,
-                'diferencia': nueva_cantidad - cantidad_anterior
+                'diferencia': nueva_cantidad - cantidad_anterior,
+                'edicion_fisica_id': edicion_id,
+                'observaciones': observaciones
             })
         ))
         
@@ -3732,6 +3801,9 @@ def editar_cantidad_sistema(data):
             observaciones
         ))
         
+        # Obtener el ID de la edición recién insertada
+        edicion_id = cursor.lastrowid
+        
         # Registrar en historial
         cursor.execute("""
             INSERT INTO historial_acciones_comparacion (
@@ -3753,7 +3825,9 @@ def editar_cantidad_sistema(data):
             json.dumps({
                 'cantidad_anterior': cantidad_anterior,
                 'cantidad_nueva': nueva_cantidad,
-                'diferencia': nueva_cantidad - cantidad_anterior
+                'diferencia': nueva_cantidad - cantidad_anterior,
+                'edicion_sistema_id': edicion_id,
+                'observaciones': observaciones
             })
         ))
         
@@ -4109,10 +4183,31 @@ def obtener_historial_acciones(inventario_id=None, almacen=None):
     """
     Obtiene el historial completo de acciones de comparación
     Puede filtrar por inventario_id o por almacen
+    Si se pasa almacen sin inventario_id, filtra por inventario activo
     """
     try:
         conn = get_connection()
         cursor = conn.cursor()
+        
+        # Si se pasa almacen pero no inventario_id, obtener el inventario activo
+        if almacen and not inventario_id:
+            try:
+                cursor.callproc('sp_obtener_inventario_activo', [
+                    0,  # OUT p_inventario_id
+                    ''  # OUT p_numero_inventario
+                ])
+                cursor.execute('SELECT @_sp_obtener_inventario_activo_0, @_sp_obtener_inventario_activo_1')
+                result_activo = cursor.fetchone()
+                inventario_id_activo = result_activo['@_sp_obtener_inventario_activo_0']
+                
+                if inventario_id_activo:
+                    inventario_id = inventario_id_activo
+            except Exception as sp_error:
+                # Si el stored procedure falla, usar consulta directa
+                cursor.execute("SELECT id FROM inventarios WHERE estado = 'activo' LIMIT 1")
+                inventario_activo = cursor.fetchone()
+                if inventario_activo:
+                    inventario_id = inventario_activo.get('id')
         
         query = """
             SELECT 
@@ -4147,20 +4242,32 @@ def obtener_historial_acciones(inventario_id=None, almacen=None):
                 v.stock_fisico,
                 v.stock_sistema,
                 v.estado_verificacion,
-                v.observaciones as obs_verificacion
+                v.observaciones as obs_verificacion,
+                -- Observaciones de ediciones físicas
+                ef.observaciones as obs_fisica,
+                -- Observaciones de ediciones del sistema
+                es.observaciones as obs_sistema
             FROM historial_acciones_comparacion h
             JOIN inventarios i ON h.inventario_id = i.id
             LEFT JOIN verificaciones v ON h.tipo_accion = 'VERIFICACION' 
                 AND h.detalles LIKE CONCAT('%%"verificacion_id": ', v.id, '%%')
+            LEFT JOIN ediciones_cantidad_fisica ef ON h.tipo_accion = 'EDITAR_CANTIDAD_FISICA'
+                AND JSON_EXTRACT(h.detalles, '$.edicion_fisica_id') = ef.id
+            LEFT JOIN ediciones_cantidad_sistema es ON h.tipo_accion = 'EDITAR_CANTIDAD_SISTEMA'
+                AND JSON_EXTRACT(h.detalles, '$.edicion_sistema_id') = es.id
         """
         
         params = []
+        conditions = []
         if almacen:
-            query += " WHERE h.almacen = %s"
+            conditions.append("h.almacen = %s")
             params.append(almacen)
-        elif inventario_id:
-            query += " WHERE h.inventario_id = %s"
+        if inventario_id:
+            conditions.append("h.inventario_id = %s")
             params.append(inventario_id)
+        
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
             
         query += " ORDER BY h.fecha_hora DESC"
         
@@ -4168,7 +4275,7 @@ def obtener_historial_acciones(inventario_id=None, almacen=None):
         
         acciones = cursor.fetchall()
         
-        # Convertir detalles JSON a string y mergear con campos de verificación
+        # Convertir detalles JSON y agregar observaciones
         for accion in acciones:
             if accion['detalles']:
                 try:
@@ -4185,8 +4292,29 @@ def obtener_historial_acciones(inventario_id=None, almacen=None):
                             'obs_verificacion'
                         ]
                         for field in verif_fields:
-                            if field in accion: # Check if the field exists in the fetched row (could be None from LEFT JOIN)
+                            if field in accion and accion[field] is not None:
                                 det[field] = accion[field]
+                        # Agregar observaciones de verificación (prioridad: JOIN > detalles JSON)
+                        if accion.get('obs_verificacion'):
+                            accion['observaciones'] = accion['obs_verificacion']
+                            det['observaciones'] = accion['obs_verificacion']
+                        elif det.get('observaciones'):
+                            accion['observaciones'] = det['observaciones']
+                    # Si es edición física, agregar observaciones (prioridad: JOIN > detalles JSON)
+                    elif accion['tipo_accion'] == 'EDITAR_CANTIDAD_FISICA':
+                        if accion.get('obs_fisica'):
+                            accion['observaciones'] = accion['obs_fisica']
+                            det['observaciones'] = accion['obs_fisica']
+                        elif det.get('observaciones'):
+                            accion['observaciones'] = det['observaciones']
+                    # Si es edición del sistema, agregar observaciones (prioridad: JOIN > detalles JSON)
+                    elif accion['tipo_accion'] == 'EDITAR_CANTIDAD_SISTEMA':
+                        if accion.get('obs_sistema'):
+                            accion['observaciones'] = accion['obs_sistema']
+                            det['observaciones'] = accion['obs_sistema']
+                        elif det.get('observaciones'):
+                            accion['observaciones'] = det['observaciones']
+                    
                     accion['detalles'] = det
                 except:
                     accion['detalles'] = str(accion['detalles'])
@@ -4617,64 +4745,179 @@ def obtener_consolidado_callao(inventario_id=None, forzar_regenerar=False):
                 inventario_id = inventario['id']
             else:
                 return {'success': False, 'message': 'No se especificó inventario y no hay inventario activo', 'consolidado': []}
-
-        # OPTIMIZACIÓN: Primero intentar leer directamente de la tabla
-        if not forzar_regenerar:
+        
+        # Si forzar_regenerar=True, ir directamente a regeneración completa
+        if forzar_regenerar:
+            logging.info(f"obtener_consolidado_callao: Forzando regeneración completa para inventario_id={inventario_id}")
+        else:
+            # MODO OPTIMIZADO: Consultar conteos en vivo y actualizar tabla
+            # 1. Obtener ID del almacén Callao
+            cursor.execute("SELECT id FROM almacenes WHERE nombre = 'Callao'")
+            almacen_callao = cursor.fetchone()
+            almacen_id = almacen_callao['id'] if almacen_callao else None
+            
+            if not almacen_id:
+                return {'success': False, 'message': 'No se encontró el almacén Callao', 'consolidado': []}
+            
+            # 2. OBTENER SUMATORIA REAL DE CONTEOS FÍSICOS (desde detalle_conteo)
             cursor.execute("""
                 SELECT 
-                    id,
-                    producto_item,
-                    producto,
-                    codigo,
-                    sistema,
-                    fisico,
-                    diferencia,
-                    unidad_medida
-                FROM consolidado_inventario_callao
-                WHERE inventario_id = %s
-                ORDER BY producto
+                    pi.codigo, 
+                    SUM(dc.cantidad) as total_fisico
+                FROM detalle_conteo dc
+                JOIN conteos c ON dc.conteo_id = c.id
+                JOIN productos_inventario pi ON dc.item_producto = pi.item
+                WHERE c.inventario_id = %s 
+                    AND c.almacen_id = %s 
+                    AND c.estado != 'anulado'
+                    AND dc.cantidad > 0
+                GROUP BY pi.codigo
+            """, (inventario_id, almacen_id))
+            
+            conteos_fisicos = {}
+            conteos_raw = cursor.fetchall()
+            for row in conteos_raw:
+                codigo_normalizado = str(row['codigo']).strip().upper() if row['codigo'] else ''
+                if codigo_normalizado:
+                    conteos_fisicos[codigo_normalizado] = float(row['total_fisico'])
+            
+            # 3. CONSULTA MAESTRA: Unir Sistema con Comparaciones (IGUAL QUE COMPARAR)
+            # Esto permite obtener cantidad_fisica editada desde comparaciones_callao
+            cursor.execute("""
+                SELECT 
+                    ds.id as sistema_id,
+                    cc.id as comparacion_id,
+                    ds.producto_item as item,
+                    ds.producto,
+                    ds.codigo,
+                    ds.cantidad_sistema,
+                    cc.cantidad_fisica as cant_fisica_db,
+                    ds.unidad_medida
+                FROM datos_sistema_callao ds
+                LEFT JOIN comparaciones_callao cc ON ds.inventario_id = cc.inventario_id AND ds.codigo = cc.codigo
+                WHERE ds.inventario_id = %s AND ds.estado IN ('activo', 'ACTIVO', 'modificado', 'MODIFICADO')
+                ORDER BY ds.producto
             """, (inventario_id,))
             
-            datos_tabla = cursor.fetchall()
+            todos_productos_sistema = cursor.fetchall()
             
-            if datos_tabla and len(datos_tabla) > 0:
-                # Hay datos en la tabla, usarlos directamente
-                consolidado = []
-                total_sistema = 0
-                total_fisico = 0
-                diferencia_total = 0
-                productos_sobrantes = 0
-                productos_faltantes = 0
-                productos_conformes = 0
+            # 4. Construir consolidado con conteos en vivo Y ediciones de comparación
+            consolidado = []
+            total_sistema = 0
+            total_fisico = 0
+            diferencia_total = 0
+            productos_sobrantes = 0
+            productos_faltantes = 0
+            productos_conformes = 0
+            
+            for prod_sistema in todos_productos_sistema:
+                codigo = str(prod_sistema.get('codigo') or '').strip().upper()
+                if not codigo:
+                    continue
                 
-                for row in datos_tabla:
-                    sistema = float(row['sistema'] or 0)
-                    fisico = float(row['fisico'] or 0)
-                    diferencia = float(row['diferencia'] or 0)
-                    
-                    total_sistema += sistema
-                    total_fisico += fisico
+                sistema = float(prod_sistema['cantidad_sistema'] or 0)
+                
+                # Cantidad física: Prioridad 1: Editada en comparaciones_callao
+                cant_fisica_db = prod_sistema.get('cant_fisica_db')
+                # Prioridad 2: Conteos reales desde detalle_conteo
+                cant_fisica_raw = conteos_fisicos.get(codigo, None)
+                
+                cant_fisica = 0.0
+                tiene_conteo = False
+                
+                if cant_fisica_db is not None:
+                    cant_fisica = float(cant_fisica_db)
+                    tiene_conteo = True
+                elif cant_fisica_raw is not None:
+                    cant_fisica = float(cant_fisica_raw)
+                    tiene_conteo = True
+                
+                diferencia = cant_fisica - sistema
+                
+                total_sistema += sistema
+                if tiene_conteo:
+                    total_fisico += cant_fisica
                     diferencia_total += diferencia
-                    
-                    if diferencia == 0 and fisico > 0:
-                        productos_conformes += 1
-                    elif diferencia > 0:
-                        productos_sobrantes += 1
-                    elif diferencia < 0:
-                        productos_faltantes += 1
-                    
-                    consolidado.append({
-                        'id': row['id'],
-                        'inventario_id': inventario_id,
-                        'producto_item': row['producto_item'],
-                        'producto': row['producto'],
-                        'codigo': row['codigo'],
-                        'sistema': int(sistema),
-                        'fisico': int(fisico),
-                        'diferencia': int(diferencia),
-                        'unidad_medida': row['unidad_medida'] or 'UND'
-                    })
                 
+                if diferencia == 0 and tiene_conteo:
+                    productos_conformes += 1
+                elif diferencia > 0:
+                    productos_sobrantes += 1
+                elif diferencia < 0:
+                    productos_faltantes += 1
+                
+                consolidado.append({
+                    'id': prod_sistema['sistema_id'],
+                    'inventario_id': inventario_id,
+                    'producto_item': prod_sistema['item'],
+                    'producto': prod_sistema['producto'],
+                    'codigo': codigo,
+                    'sistema': int(sistema),
+                    'fisico': int(cant_fisica) if tiene_conteo else 0,
+                    'diferencia': int(diferencia) if tiene_conteo else 0,
+                    'unidad_medida': prod_sistema['unidad_medida'] or 'UND'
+                })
+            
+            # 5. ACTUALIZAR tabla consolidado_inventario_callao con datos en vivo
+            registros_actualizados = 0
+            for item in consolidado:
+                codigo = str(item['codigo']).strip().upper() if item.get('codigo') else ''
+                if not codigo:
+                    continue
+                
+                # Verificar si ya existe
+                cursor.execute("""
+                    SELECT id FROM consolidado_inventario_callao 
+                    WHERE inventario_id = %s AND codigo = %s
+                """, (inventario_id, codigo))
+                
+                existente = cursor.fetchone()
+                
+                if existente:
+                    # Actualizar con datos en vivo
+                    cursor.execute("""
+                        UPDATE consolidado_inventario_callao SET
+                            producto_item = %s,
+                            producto = %s,
+                            sistema = %s,
+                            fisico = %s,
+                            diferencia = %s,
+                            unidad_medida = %s,
+                            fecha_consolidacion = CURRENT_TIMESTAMP
+                        WHERE inventario_id = %s AND codigo = %s
+                    """, (
+                        item['producto_item'],
+                        item['producto'],
+                        item['sistema'],
+                        item['fisico'],
+                        item['diferencia'],
+                        item['unidad_medida'],
+                        inventario_id,
+                        codigo
+                    ))
+                    registros_actualizados += 1
+                else:
+                    # Insertar nuevo
+                    cursor.execute("""
+                        INSERT INTO consolidado_inventario_callao (
+                            inventario_id, producto_item, producto, codigo,
+                            sistema, fisico, diferencia, unidad_medida
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        inventario_id,
+                        item['producto_item'],
+                        item['producto'],
+                        codigo,
+                        item['sistema'],
+                        item['fisico'],
+                        item['diferencia'],
+                        item['unidad_medida']
+                    ))
+            
+            conn.commit()
+            logging.info(f"obtener_consolidado_callao: Actualizados {registros_actualizados} registros con conteos en vivo")
+            
+            if len(consolidado) > 0:
                 # Resumen
                 resumen = {
                     'total_productos': len(consolidado),
@@ -4694,7 +4937,7 @@ def obtener_consolidado_callao(inventario_id=None, forzar_regenerar=False):
                 """, (inventario_id,))
                 inventario_info = cursor.fetchone()
                 
-                logging.info(f"obtener_consolidado_callao: Leídos {len(consolidado)} productos desde tabla (optimizado)")
+                logging.info(f"obtener_consolidado_callao: Leídos {len(consolidado)} productos con conteos en vivo desde detalle_conteo")
                 
                 return {
                     'success': True,
@@ -4705,10 +4948,10 @@ def obtener_consolidado_callao(inventario_id=None, forzar_regenerar=False):
                     'resumen': resumen,
                     'total_registros': len(consolidado),
                     'registros_guardados': 0,
-                    'registros_actualizados': 0
+                    'registros_actualizados': registros_actualizados
                 }
         
-        # Si llegamos aquí, necesitamos regenerar (tabla vacía o forzar_regenerar=True)
+        # Si llegamos aquí, necesitamos regenerar (forzar_regenerar=True o tabla vacía)
         logging.info(f"obtener_consolidado_callao: Regenerando consolidado para inventario_id={inventario_id}")
         
         # 1. Obtener ID del almacén Callao
@@ -4952,64 +5195,179 @@ def obtener_consolidado_malvinas(inventario_id=None, forzar_regenerar=False):
                 inventario_id = inventario['id']
             else:
                 return {'success': False, 'message': 'No se especificó inventario y no hay inventario activo', 'consolidado': []}
-
-        # OPTIMIZACIÓN: Primero intentar leer directamente de la tabla
-        if not forzar_regenerar:
+        
+        # Si forzar_regenerar=True, ir directamente a regeneración completa
+        if forzar_regenerar:
+            logging.info(f"obtener_consolidado_malvinas: Forzando regeneración completa para inventario_id={inventario_id}")
+        else:
+            # MODO OPTIMIZADO: Consultar conteos en vivo y actualizar tabla
+            # 1. Obtener ID del almacén Malvinas
+            cursor.execute("SELECT id FROM almacenes WHERE nombre = 'Malvinas'")
+            almacen_malvinas = cursor.fetchone()
+            almacen_id = almacen_malvinas['id'] if almacen_malvinas else None
+            
+            if not almacen_id:
+                return {'success': False, 'message': 'No se encontró el almacén Malvinas', 'consolidado': []}
+            
+            # 2. OBTENER SUMATORIA REAL DE CONTEOS FÍSICOS (desde detalle_conteo)
             cursor.execute("""
                 SELECT 
-                    id,
-                    producto_item,
-                    producto,
-                    codigo,
-                    sistema,
-                    fisico,
-                    diferencia,
-                    unidad_medida
-                FROM consolidado_inventario_malvinas
-                WHERE inventario_id = %s
-                ORDER BY producto
+                    pi.codigo, 
+                    SUM(dc.cantidad) as total_fisico
+                FROM detalle_conteo dc
+                JOIN conteos c ON dc.conteo_id = c.id
+                JOIN productos_inventario pi ON dc.item_producto = pi.item
+                WHERE c.inventario_id = %s 
+                    AND c.almacen_id = %s 
+                    AND c.estado != 'anulado'
+                    AND dc.cantidad > 0
+                GROUP BY pi.codigo
+            """, (inventario_id, almacen_id))
+            
+            conteos_fisicos = {}
+            conteos_raw = cursor.fetchall()
+            for row in conteos_raw:
+                codigo_normalizado = str(row['codigo']).strip().upper() if row['codigo'] else ''
+                if codigo_normalizado:
+                    conteos_fisicos[codigo_normalizado] = float(row['total_fisico'])
+            
+            # 3. CONSULTA MAESTRA: Unir Sistema con Comparaciones (IGUAL QUE COMPARAR)
+            # Esto permite obtener cantidad_fisica editada desde comparaciones_malvinas
+            cursor.execute("""
+                SELECT 
+                    ds.id as sistema_id,
+                    cc.id as comparacion_id,
+                    ds.producto_item as item,
+                    ds.producto,
+                    ds.codigo,
+                    ds.cantidad_sistema,
+                    cc.cantidad_fisica as cant_fisica_db,
+                    ds.unidad_medida
+                FROM datos_sistema_malvinas ds
+                LEFT JOIN comparaciones_malvinas cc ON ds.inventario_id = cc.inventario_id AND ds.codigo = cc.codigo
+                WHERE ds.inventario_id = %s AND ds.estado IN ('activo', 'ACTIVO', 'modificado', 'MODIFICADO')
+                ORDER BY ds.producto
             """, (inventario_id,))
             
-            datos_tabla = cursor.fetchall()
+            todos_productos_sistema = cursor.fetchall()
             
-            if datos_tabla and len(datos_tabla) > 0:
-                # Hay datos en la tabla, usarlos directamente
-                consolidado = []
-                total_sistema = 0
-                total_fisico = 0
-                diferencia_total = 0
-                productos_sobrantes = 0
-                productos_faltantes = 0
-                productos_conformes = 0
+            # 4. Construir consolidado con conteos en vivo Y ediciones de comparación
+            consolidado = []
+            total_sistema = 0
+            total_fisico = 0
+            diferencia_total = 0
+            productos_sobrantes = 0
+            productos_faltantes = 0
+            productos_conformes = 0
+            
+            for prod_sistema in todos_productos_sistema:
+                codigo = str(prod_sistema.get('codigo') or '').strip().upper()
+                if not codigo:
+                    continue
                 
-                for row in datos_tabla:
-                    sistema = float(row['sistema'] or 0)
-                    fisico = float(row['fisico'] or 0)
-                    diferencia = float(row['diferencia'] or 0)
-                    
-                    total_sistema += sistema
-                    total_fisico += fisico
+                sistema = float(prod_sistema['cantidad_sistema'] or 0)
+                
+                # Cantidad física: Prioridad 1: Editada en comparaciones_malvinas
+                cant_fisica_db = prod_sistema.get('cant_fisica_db')
+                # Prioridad 2: Conteos reales desde detalle_conteo
+                cant_fisica_raw = conteos_fisicos.get(codigo, None)
+                
+                cant_fisica = 0.0
+                tiene_conteo = False
+                
+                if cant_fisica_db is not None:
+                    cant_fisica = float(cant_fisica_db)
+                    tiene_conteo = True
+                elif cant_fisica_raw is not None:
+                    cant_fisica = float(cant_fisica_raw)
+                    tiene_conteo = True
+                
+                diferencia = cant_fisica - sistema
+                
+                total_sistema += sistema
+                if tiene_conteo:
+                    total_fisico += cant_fisica
                     diferencia_total += diferencia
-                    
-                    if diferencia == 0 and fisico > 0:
-                        productos_conformes += 1
-                    elif diferencia > 0:
-                        productos_sobrantes += 1
-                    elif diferencia < 0:
-                        productos_faltantes += 1
-                    
-                    consolidado.append({
-                        'id': row['id'],
-                        'inventario_id': inventario_id,
-                        'producto_item': row['producto_item'],
-                        'producto': row['producto'],
-                        'codigo': row['codigo'],
-                        'sistema': int(sistema),
-                        'fisico': int(fisico),
-                        'diferencia': int(diferencia),
-                        'unidad_medida': row['unidad_medida'] or 'UND'
-                    })
                 
+                if diferencia == 0 and tiene_conteo:
+                    productos_conformes += 1
+                elif diferencia > 0:
+                    productos_sobrantes += 1
+                elif diferencia < 0:
+                    productos_faltantes += 1
+                
+                consolidado.append({
+                    'id': prod_sistema['sistema_id'],
+                    'inventario_id': inventario_id,
+                    'producto_item': prod_sistema['item'],
+                    'producto': prod_sistema['producto'],
+                    'codigo': codigo,
+                    'sistema': int(sistema),
+                    'fisico': int(cant_fisica) if tiene_conteo else 0,
+                    'diferencia': int(diferencia) if tiene_conteo else 0,
+                    'unidad_medida': prod_sistema['unidad_medida'] or 'UND'
+                })
+            
+            # 5. ACTUALIZAR tabla consolidado_inventario_malvinas con datos en vivo
+            registros_actualizados = 0
+            for item in consolidado:
+                codigo = str(item['codigo']).strip().upper() if item.get('codigo') else ''
+                if not codigo:
+                    continue
+                
+                # Verificar si ya existe
+                cursor.execute("""
+                    SELECT id FROM consolidado_inventario_malvinas 
+                    WHERE inventario_id = %s AND codigo = %s
+                """, (inventario_id, codigo))
+                
+                existente = cursor.fetchone()
+                
+                if existente:
+                    # Actualizar con datos en vivo
+                    cursor.execute("""
+                        UPDATE consolidado_inventario_malvinas SET
+                            producto_item = %s,
+                            producto = %s,
+                            sistema = %s,
+                            fisico = %s,
+                            diferencia = %s,
+                            unidad_medida = %s,
+                            fecha_consolidacion = CURRENT_TIMESTAMP
+                        WHERE inventario_id = %s AND codigo = %s
+                    """, (
+                        item['producto_item'],
+                        item['producto'],
+                        item['sistema'],
+                        item['fisico'],
+                        item['diferencia'],
+                        item['unidad_medida'],
+                        inventario_id,
+                        codigo
+                    ))
+                    registros_actualizados += 1
+                else:
+                    # Insertar nuevo
+                    cursor.execute("""
+                        INSERT INTO consolidado_inventario_malvinas (
+                            inventario_id, producto_item, producto, codigo,
+                            sistema, fisico, diferencia, unidad_medida
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        inventario_id,
+                        item['producto_item'],
+                        item['producto'],
+                        codigo,
+                        item['sistema'],
+                        item['fisico'],
+                        item['diferencia'],
+                        item['unidad_medida']
+                    ))
+            
+            conn.commit()
+            logging.info(f"obtener_consolidado_malvinas: Actualizados {registros_actualizados} registros con conteos en vivo")
+            
+            if len(consolidado) > 0:
                 # Resumen
                 resumen = {
                     'total_productos': len(consolidado),
@@ -5029,7 +5387,7 @@ def obtener_consolidado_malvinas(inventario_id=None, forzar_regenerar=False):
                 """, (inventario_id,))
                 inventario_info = cursor.fetchone()
                 
-                logging.info(f"obtener_consolidado_malvinas: Leídos {len(consolidado)} productos desde tabla (optimizado)")
+                logging.info(f"obtener_consolidado_malvinas: Leídos {len(consolidado)} productos con conteos en vivo desde detalle_conteo")
                 
                 return {
                     'success': True,
@@ -5040,10 +5398,10 @@ def obtener_consolidado_malvinas(inventario_id=None, forzar_regenerar=False):
                     'resumen': resumen,
                     'total_registros': len(consolidado),
                     'registros_guardados': 0,
-                    'registros_actualizados': 0
+                    'registros_actualizados': registros_actualizados
                 }
         
-        # Si llegamos aquí, necesitamos regenerar (tabla vacía o forzar_regenerar=True)
+        # Si llegamos aquí, necesitamos regenerar (forzar_regenerar=True o tabla vacía)
         logging.info(f"obtener_consolidado_malvinas: Regenerando consolidado para inventario_id={inventario_id}")
         
         # 1. Obtener ID del almacén Malvinas
@@ -5297,7 +5655,7 @@ def obtener_consolidado_general(inventario_id=None):
             except (ValueError, TypeError):
                 inventario_id = None
 
-        # Si no se especifica inventario, buscar el activo
+            # Si no se especifica inventario, buscar el activo
         if not inventario_id:
             conn_tmp = get_connection()
             cursor_tmp = conn_tmp.cursor()
@@ -5547,18 +5905,18 @@ def obtener_consolidado_general(inventario_id=None):
                 # Insertar nuevo registro
                 cursor.execute("""
                     INSERT INTO consolidado_general (
-                        inventario_id,
-                        producto_item,
-                        producto,
-                        codigo,
-                        total_sistema,
-                        total_fisico,
-                        diferencia,
-                        resultado,
-                        unidad_medida,
-                        callao_sistema,
-                        callao_fisico,
-                        malvinas_sistema,
+                inventario_id,
+                producto_item,
+                producto,
+                codigo,
+                total_sistema,
+                total_fisico,
+                diferencia,
+                resultado,
+                unidad_medida,
+                callao_sistema,
+                callao_fisico,
+                malvinas_sistema,
                         malvinas_fisico
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
@@ -5599,7 +5957,7 @@ def obtener_consolidado_general(inventario_id=None):
             'total_malvinas_sistema': int(total_malvinas_sistema),
             'total_malvinas_fisico': int(total_malvinas_fisico)
         }
-
+        
         # Obtener información básica del inventario para cabecera
         cursor.execute("""
             SELECT numero_inventario, area, autorizado_por, fecha_hora_asignacion
@@ -5948,10 +6306,10 @@ def registrar_proforma(data):
                     almacen, registrado_por, estado
                 ) VALUES (%s, %s, %s, %s, %s, 'activa')
             """, (
-                data['inventario_id'],
-                data['numero_proforma'],
-                data['asesor'],
-                data['almacen'],
+            data['inventario_id'],
+            data['numero_proforma'],
+            data['asesor'],
+            data['almacen'],
                 data['registrado_por']
             ))
             

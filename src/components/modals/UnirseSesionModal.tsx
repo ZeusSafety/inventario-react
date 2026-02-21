@@ -22,17 +22,15 @@ export default function UnirseSesionModal({ isOpen, onClose }: Props) {
     const [loading, setLoading] = useState(false);
 
     React.useEffect(() => {
-        if (isOpen && state.detectedInventory) {
+        if (isOpen) {
+            // Priorizar sesionActual.numero si existe (es el nombre real que se muestra en el header)
+            // Si no, usar detectedInventory.numero
+            const numeroInventario = state.sesionActual.numero || state.detectedInventory?.numero || '';
             setFormData(prev => ({
                 ...prev,
-                num: state.detectedInventory!.numero,
-                area: 'Administración',
-                persona: 'Hervin'
-            }));
-        } else if (isOpen && state.sesionActual.numero) {
-            setFormData(prev => ({
-                ...prev,
-                num: state.sesionActual.numero || '',
+                num: numeroInventario,
+                area: prev.area || 'Administración',
+                persona: prev.persona || 'Hervin'
             }));
         }
     }, [isOpen, state.detectedInventory, state.sesionActual.numero]);
@@ -136,10 +134,15 @@ export default function UnirseSesionModal({ isOpen, onClose }: Props) {
                     <div className="relative">
                         <label className="block text-[10px] font-black text-blue-500 uppercase mb-1 absolute -top-2 left-3 bg-white px-1 z-10 tracking-tighter">Número de Inventario</label>
                         <input
-                            className="w-full px-4 py-4 bg-gray-50 border border-gray-100 rounded-2xl text-gray-700 font-bold focus:outline-none focus:border-blue-400 transition-all shadow-sm text-lg"
+                            className={`w-full px-4 py-4 bg-gray-50 border border-gray-100 rounded-2xl text-gray-700 font-bold focus:outline-none focus:border-blue-400 transition-all shadow-sm text-lg ${(state.detectedInventory || state.sesionActual.numero) ? 'cursor-not-allowed bg-gray-100' : ''}`}
                             placeholder="Ej: INV-2025-214"
-                            value={formData.num}
-                            onChange={(e) => setFormData({ ...formData, num: e.target.value })}
+                            value={state.sesionActual.numero || state.detectedInventory?.numero || formData.num}
+                            onChange={(e) => {
+                                if (!state.detectedInventory && !state.sesionActual.numero) {
+                                    setFormData({ ...formData, num: e.target.value });
+                                }
+                            }}
+                            readOnly={!!(state.detectedInventory || state.sesionActual.numero)}
                         />
                     </div>
 
@@ -153,7 +156,6 @@ export default function UnirseSesionModal({ isOpen, onClose }: Props) {
                             <option value="Administración">Administración</option>
                             <option value="Logística">Logística</option>
                             <option value="Ventas">Ventas</option>
-                            <option value="Otro">Otro</option>
                         </select>
                     </div>
 

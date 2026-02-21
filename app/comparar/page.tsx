@@ -22,7 +22,9 @@ import {
     History,
     ShieldCheck,
     FileText,
-    Eye
+    Eye,
+    Sheet,
+    Loader2
 } from 'lucide-react';
 import { apiCall, apiCallFormData, API_BASE_URL } from '@/lib/api';
 import * as XLSX from 'xlsx';
@@ -94,11 +96,13 @@ export default function CompararPage() {
 
     // Edit Form States
     const [editForm, setEditForm] = useState({
-        cantidad: 0,
+        cantidad: '' as number | '',
         motivo_tipo: '', // 'Error de conteo', 'otro' etc.
         motivo: '',      // El texto final
         registrado_por: '',
+        registrado_por_otro: '', // Campo para "Otros" en Registrado por
         error_de: '',
+        error_de_otro: '', // Campo para "Otros" en Error de
         observaciones: ''
     });
 
@@ -222,9 +226,10 @@ export default function CompararPage() {
 
 
     const fetchHistory = async () => {
-        if (!selectedAlmacen) return;
+        if (!selectedAlmacen || !state.sesionActual.inventario_id) return;
         try {
-            const response = await apiCall(`obtener_historial_acciones&almacen=${selectedAlmacen}`);
+            // Pasar tanto almacen como inventario_id para filtrar por inventario activo
+            const response = await apiCall(`obtener_historial_acciones&almacen=${selectedAlmacen}&inventario_id=${state.sesionActual.inventario_id}`);
             if (response.success) {
                 setHistoryData(response.acciones || []);
             } else {
@@ -331,20 +336,24 @@ export default function CompararPage() {
 
         if (action === 'fisico') {
             setEditForm({
-                cantidad: item.cantidad_fisica,
+                cantidad: item.cantidad_fisica || '',
                 motivo_tipo: '',
                 motivo: '',
                 registrado_por: '',
+                registrado_por_otro: '',
                 error_de: 'logistica',
+                error_de_otro: '',
                 observaciones: ''
             });
         } else if (action === 'sistema') {
             setEditForm({
-                cantidad: item.cantidad_sistema,
+                cantidad: item.cantidad_sistema || '',
                 motivo_tipo: '',
                 motivo: '',
                 registrado_por: '',
+                registrado_por_otro: '',
                 error_de: 'sistema',
+                error_de_otro: '',
                 observaciones: ''
             });
         }
@@ -405,18 +414,31 @@ export default function CompararPage() {
         }
     };
 
+    const [isSubmittingEdit, setIsSubmittingEdit] = useState(false);
+
     const handleSubmitEdit = async () => {
         if (!selectedItem || !selectedAlmacen) return;
+        setIsSubmittingEdit(true);
 
         const action = activeModal === 'fisico' ? 'editar_cantidad_fisica' : 'editar_cantidad_sistema';
+        
+        // Determinar el valor final de registrado_por y error_de
+        const registradoPorFinal = editForm.registrado_por === 'Otros' 
+            ? editForm.registrado_por_otro 
+            : editForm.registrado_por;
+        
+        const errorDeFinal = editForm.error_de === 'Otros' 
+            ? editForm.error_de_otro 
+            : editForm.error_de;
+        
         const payload = {
             comparacion_id: selectedItem.id,
             inventario_id: state.sesionActual.inventario_id,
             almacen: selectedAlmacen,
-            nueva_cantidad: editForm.cantidad,
+            nueva_cantidad: typeof editForm.cantidad === 'number' ? editForm.cantidad : 0,
             motivo: editForm.motivo || editForm.motivo_tipo,
-            registrado_por: editForm.registrado_por || 'SISTEMA',
-            error_de: editForm.error_de,
+            registrado_por: registradoPorFinal || 'SISTEMA',
+            error_de: errorDeFinal,
             observaciones: editForm.observaciones
         };
 
@@ -432,6 +454,8 @@ export default function CompararPage() {
             }
         } catch (error) {
             showAlert('Error', 'Hubo un problema al actualizar', 'error');
+        } finally {
+            setIsSubmittingEdit(false);
         }
     };
 
@@ -478,6 +502,162 @@ export default function CompararPage() {
         item.estado?.toLowerCase().includes(filterText.toLowerCase())
     );
 
+
+    const handleDownloadVerificationPDF = () => {
+        if (!selectedItem) return;
+
+        const doc = new jsPDF();
+        
+        // Título
+        doc.setFontSize(16);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Resultado de Verificación - Zeus Safety', 14, 20);
+        
+        // Fecha de emisión
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+        const fechaEmision = new Date().toLocaleString('es-PE', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true
+        });
+        doc.text(`Emitido: ${fechaEmision}`, 14, 28);
+        
+        let yPos = 38;
+        
+        // SECCIÓN COMPRAS
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'bold');
+        doc.text('COMPRAS', 14, yPos);
+        yPos += 8;
+        
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+        
+        const comprasData = [
+            ['Fecha ingreso', verificacionForm.fecha_ingreso_compra || '-'],
+            ['Hora ingreso', verificacionForm.hora_ingreso_compra || '-'],
+            ['N° acta', verificacionForm.numero_acta || '-'],
+            ['Fecha descarga inv.', verificacionForm.fecha_descarga_compra || '-'],
+            ['Hora descarga inv.', verificacionForm.hora_descarga_compra || '-']
+        ];
+        
+        autoTable(doc, {
+            startY: yPos,
+            head: [['Campo', 'VALOR']],
+            body: comprasData,
+            theme: 'striped',
+            headStyles: { fillColor: [0, 97, 242], textColor: 255, fontStyle: 'bold' },
+            styles: { fontSize: 9 },
+            margin: { left: 14 }
+        });
+        
+        yPos = (doc as any).lastAutoTable.finalY + 10;
+        
+        // SECCIÓN VENTAS
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'bold');
+        doc.text('VENTAS', 14, yPos);
+        yPos += 8;
+        
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+        
+        const ventasData = [
+            ['Fecha desc. ventas', verificacionForm.fecha_descarga_ventas || '-'],
+            ['Hora desc. ventas', verificacionForm.hora_descarga_ventas || '-'],
+            ['Fecha desc. sistema', verificacionForm.fecha_descarga_sistema || '-'],
+            ['Hora desc. sistema', verificacionForm.hora_descarga_sistema || '-']
+        ];
+        
+        autoTable(doc, {
+            startY: yPos,
+            head: [['Campo', 'VALOR']],
+            body: ventasData,
+            theme: 'striped',
+            headStyles: { fillColor: [102, 16, 242], textColor: 255, fontStyle: 'bold' },
+            styles: { fontSize: 9 },
+            margin: { left: 14 }
+        });
+        
+        yPos = (doc as any).lastAutoTable.finalY + 10;
+        
+        // RESUMEN GENERAL
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Resumen General', 14, yPos);
+        yPos += 8;
+        
+        const compras = Number(verificacionForm.compras_totales || 0);
+        const ventas = Number(verificacionForm.ventas_totales || 0);
+        const stockExistencia = compras - ventas;
+        const stockFisico = Number(selectedItem?.cantidad_fisica || 0);
+        const stockSistema = Number(selectedItem?.cantidad_sistema || 0);
+        
+        const resumenData = [
+            ['Compras Totales', compras.toString()],
+            ['Ventas Totales', ventas.toString()],
+            ['Stock de Existencias', stockExistencia.toString()],
+            ['Stock Físico', stockFisico.toString()],
+            ['Stock Sistema', stockSistema.toString()]
+        ];
+        
+        autoTable(doc, {
+            startY: yPos,
+            head: [['Campo', 'VALOR']],
+            body: resumenData,
+            theme: 'striped',
+            headStyles: { fillColor: [255, 193, 7], textColor: 0, fontStyle: 'bold' },
+            styles: { fontSize: 9 },
+            margin: { left: 14 }
+        });
+        
+        yPos = (doc as any).lastAutoTable.finalY + 10;
+        
+        // RESULTADO DE VERIFICACIÓN
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Resultado de Verificación', 14, yPos);
+        yPos += 8;
+        
+        let resultado = '';
+        const matchFisico = Math.abs(stockExistencia - stockFisico) < 0.01;
+        const matchSistema = Math.abs(stockExistencia - stockSistema) < 0.01;
+        
+        if (matchFisico && matchSistema) {
+            resultado = 'CONFORME';
+        } else if (matchFisico && !matchSistema) {
+            resultado = 'Error de Sistema';
+        } else if (matchSistema && !matchFisico) {
+            resultado = 'Error de Logística';
+        } else {
+            resultado = 'REALIZAR NUEVO CONTEO';
+        }
+        
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'bold');
+        doc.text(resultado, 14, yPos);
+        
+        // Información del producto
+        yPos += 15;
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'normal');
+        doc.text(`Producto: ${selectedItem?.producto || '-'}`, 14, yPos);
+        yPos += 6;
+        doc.text(`Código: ${selectedItem?.codigo || '-'}`, 14, yPos);
+        yPos += 6;
+        doc.text(`Responsable: ${verificacionForm.registrado_por || '-'}`, 14, yPos);
+        
+        if (verificacionForm.observaciones) {
+            yPos += 6;
+            doc.text(`Observaciones: ${verificacionForm.observaciones}`, 14, yPos);
+        }
+        
+        doc.save(`Verificacion_${selectedItem?.codigo || 'reporte'}_${Date.now()}.pdf`);
+    };
 
     const handleDownloadPDF = () => {
         const doc = new jsPDF();
@@ -583,46 +763,56 @@ export default function CompararPage() {
                         <div id="panel-comparacion">
                             <div className="mb-6 p-4 bg-gray-50 rounded-2xl border border-gray-100">
                                 <div className="flex items-center justify-between flex-wrap gap-4">
-                                    <div className="flex items-center gap-6">
-                                        <div className="flex items-center gap-2 text-[11px] text-gray-600">
-                                            <span className="font-medium text-gray-400">Almacén:</span>
-                                            <b className="uppercase text-[#0B3B8C] bg-white px-2 py-0.5 rounded-lg shadow-sm border border-gray-100 uppercase uppercase">CALLAO</b>
+                                    <div className="flex items-center gap-4">
+                                        <div className="flex items-center gap-2 text-[12px]">
+                                            <span className="font-medium text-black">Almacén:</span>
+                                            <b className="uppercase text-[#0B3B8C] bg-white px-3 py-1 rounded-lg shadow-sm border border-gray-100">{selectedAlmacen?.toUpperCase() || '-'}</b>
                                         </div>
-                                        <div className="flex items-center gap-2 text-[11px] text-gray-600">
-                                            <span className="font-medium text-gray-400">Inventario:</span>
-                                            <b className="text-[#0B3B8C] bg-white px-2 py-0.5 rounded-lg shadow-sm border border-gray-100">{state.sesionActual.numero || '-'}</b>
+                                        <div className="flex items-center gap-2 text-[12px]">
+                                            <span className="font-medium text-black">Inventario:</span>
+                                            <b className="text-[#0B3B8C] bg-white px-3 py-1 rounded-lg shadow-sm border border-gray-100">{state.sesionActual.numero || '-'}</b>
                                         </div>
-                                        <div className="flex items-center gap-2 text-[11px] text-gray-600">
-                                            <span className="font-medium text-gray-400">Inicio:</span>
-                                            <b className="text-[#0B3B8C] bg-white px-2 py-0.5 rounded-lg shadow-sm border border-gray-100">{state.sesionActual.inicio || '-'}</b>
-                                        </div>
-                                        <div className="flex items-center gap-2 text-[11px] text-gray-600">
-                                            <span className="font-medium text-gray-400">Registros:</span>
-                                            <b className="text-[#0B3B8C] bg-white px-2 py-0.5 rounded-lg shadow-sm border border-gray-100">{comparacionData.length}</b>
+                                        {(() => {
+                                            const inicio = state.sesionActual.inicio || '';
+                                            const [fecha, hora] = inicio.split(' ');
+                                            return (
+                                                <>
+                                                    <div className="flex items-center gap-2 text-[12px]">
+                                                        <span className="font-medium text-black">Inicio Fecha:</span>
+                                                        <b className="text-[#0B3B8C] bg-white px-3 py-1 rounded-lg shadow-sm border border-gray-100">{fecha || '-'}</b>
+                                                    </div>
+                                                    <div className="flex items-center gap-2 text-[12px]">
+                                                        <span className="font-medium text-black">Inicio Hora:</span>
+                                                        <b className="text-[#0B3B8C] bg-white px-3 py-1 rounded-lg shadow-sm border border-gray-100">{hora || '-'}</b>
+                                                    </div>
+                                                </>
+                                            );
+                                        })()}
+                                        <div className="flex items-center gap-2 text-[12px]">
+                                            <span className="font-medium text-black">Registros:</span>
+                                            <b className="text-[#0B3B8C] bg-white px-3 py-1 rounded-lg shadow-sm border border-gray-100">{comparacionData.length}</b>
                                         </div>
                                     </div>
 
 
                                     <div className="flex items-center gap-3">
-                                        <div className="btn-group flex p-1 bg-white rounded-full shadow-sm border border-gray-200">
-                                            <button
-                                                onClick={handleDownloadPDF}
-                                                className="flex items-center gap-2 px-3 py-1 text-[10px] font-bold text-gray-700 hover:bg-gray-100 rounded-full transition-colors"
-                                            >
-                                                <FileDown className="w-3.5 h-3.5" /> PDF
-                                            </button>
-                                            <button
-                                                onClick={handleDownloadExcel}
-                                                className="flex items-center gap-2 px-3 py-1 text-[10px] font-bold text-[#198754] hover:bg-green-50 rounded-full transition-colors"
-                                            >
-                                                <FileDown className="w-3.5 h-3.5" /> Excel
-                                            </button>
-                                        </div>
+                                        <button
+                                            onClick={handleDownloadPDF}
+                                            className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-full text-xs font-bold hover:bg-red-700 transition-colors shadow-sm"
+                                        >
+                                            <FileText className="w-4 h-4" /> PDF
+                                        </button>
+                                        <button
+                                            onClick={handleDownloadExcel}
+                                            className="flex items-center gap-2 px-4 py-2 bg-[#217346] text-white rounded-full text-xs font-bold hover:bg-[#1a5a37] transition-colors shadow-sm"
+                                        >
+                                            <FileDown className="w-4 h-4" /> Excel
+                                        </button>
 
                                         <div className="relative">
                                             <input
                                                 type="text"
-                                                className="bg-white border-2 border-gray-200 text-[11px] rounded-xl block w-96 px-4 py-1.5 focus:border-[#0B3B8C] outline-none transition-all shadow-sm"
+                                                className="bg-white border-2 border-gray-200 text-[11px] rounded-xl block w-[700px] px-4 py-2 focus:border-[#0B3B8C] outline-none transition-all shadow-sm"
                                                 placeholder="Buscar..."
                                                 value={filterText}
                                                 onChange={(e) => setFilterText(e.target.value)}
@@ -738,28 +928,28 @@ export default function CompararPage() {
                                                                         left: menuPosition.left,
                                                                         zIndex: 99999
                                                                     }}
-                                                                    className="w-48 bg-white rounded-xl shadow-2xl border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200 origin-top-right"
+                                                                    className="w-36 bg-white rounded-xl shadow-2xl border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200 origin-top-right"
                                                                     onClick={(e) => e.stopPropagation()}
                                                                 >
                                                                     <button
                                                                         onClick={() => { handleActionClick(item, 'fisico'); setOpenActionId(null); setMenuPosition(null); }}
-                                                                        className="w-full text-left px-4 py-3 text-[11px] font-bold hover:bg-gray-50 text-gray-700 flex items-center gap-3 border-b border-gray-50 transition-colors"
+                                                                        className="w-full text-left px-3 py-2.5 text-[6px] font-normal hover:bg-gray-50 text-gray-700 flex items-center gap-2 border-b border-gray-50 transition-colors"
                                                                     >
-                                                                        <Edit className="w-4 h-4 text-blue-600" />
+                                                                        <Edit className="w-5 h-5 text-blue-600" />
                                                                         <span>Editar Cantidad (Físico)</span>
                                                                     </button>
                                                                     <button
                                                                         onClick={() => { handleActionClick(item, 'sistema'); setOpenActionId(null); setMenuPosition(null); }}
-                                                                        className="w-full text-left px-4 py-3 text-[11px] font-bold hover:bg-gray-50 text-gray-700 flex items-center gap-3 border-b border-gray-50 transition-colors"
+                                                                        className="w-full text-left px-3 py-2.5 text-[6px] font-normal hover:bg-gray-50 text-gray-700 flex items-center gap-2 border-b border-gray-50 transition-colors"
                                                                     >
-                                                                        <Upload className="w-4 h-4 text-orange-600" />
+                                                                        <Upload className="w-5 h-5 text-orange-600" />
                                                                         <span>Editar Sistema</span>
                                                                     </button>
                                                                     <button
                                                                         onClick={() => { handleActionClick(item, 'verificacion'); setOpenActionId(null); setMenuPosition(null); }}
-                                                                        className="w-full text-left px-4 py-3 text-[11px] font-bold hover:bg-gray-50 text-gray-700 flex items-center gap-3 transition-colors"
+                                                                        className="w-full text-left px-3 py-2.5 text-[6px] font-normal hover:bg-gray-50 text-gray-700 flex items-center gap-2 transition-colors"
                                                                     >
-                                                                        <ClipboardCheck className="w-4 h-4 text-green-600" />
+                                                                        <ClipboardCheck className="w-5 h-5 text-green-600" />
                                                                         <span>Verificación</span>
                                                                     </button>
                                                                 </div>,
@@ -822,32 +1012,45 @@ export default function CompararPage() {
                                                 </thead>
                                                 <tbody className="divide-y divide-gray-100">
                                                     {(() => {
-                                                        const filtered = historyData.filter(h => h.tipo_accion === 'EDITAR_CANTIDAD_FISICA' && h.almacen === selectedAlmacen);
+                                                        const filtered = historyData
+                                                            .filter(h => h.tipo_accion === 'EDITAR_CANTIDAD_FISICA' && h.almacen === selectedAlmacen)
+                                                            .sort((a, b) => {
+                                                                const dateA = new Date(a.fecha_hora_raw || 0).getTime();
+                                                                const dateB = new Date(b.fecha_hora_raw || 0).getTime();
+                                                                return dateB - dateA; // Descendente: más reciente primero
+                                                            });
                                                         const paginated = filtered.slice((currentPageFisico - 1) * itemsPerPage, currentPageFisico * itemsPerPage);
 
                                                         if (filtered.length === 0) {
                                                             return (
-                                                                <tr style={{ backgroundColor: 'rgb(243, 251, 233)' }}>
-                                                                    <td colSpan={9} className="px-3 py-6 text-center text-[10px] font-bold italic" style={{ color: 'rgb(91, 152, 27)' }}>SIN MOVIMIENTOS REGISTRADOS</td>
+                                                                <tr className="bg-white">
+                                                                    <td colSpan={9} className="px-3 py-6 text-center text-[10px] font-bold italic text-gray-600">SIN MOVIMIENTOS REGISTRADOS</td>
                                                                 </tr>
                                                             );
                                                         }
 
                                                         return paginated.map((item, idx) => {
                                                             const { date, time } = formatHistoryDate(item.fecha_hora_raw);
-                                                            const detCurrent = typeof item.detalles === 'string' ? JSON.parse(item.detalles) : item.detalles;
+                                                            let detCurrent;
+                                                            try {
+                                                                detCurrent = typeof item.detalles === 'string' ? JSON.parse(item.detalles) : (item.detalles || {});
+                                                            } catch {
+                                                                detCurrent = {};
+                                                            }
+                                                            // Buscar observaciones en múltiples lugares posibles
+                                                            const observaciones = (item as any).observaciones || detCurrent?.observaciones || detCurrent?.obs || (detCurrent && typeof detCurrent === 'object' && 'observaciones' in detCurrent ? (detCurrent as any).observaciones : null) || 'Sin observaciones';
                                                             return (
-                                                                <tr key={item.id} className="border-b border-gray-100 hover:bg-white/50 transition-all duration-200" style={{ backgroundColor: 'rgb(243, 251, 233)' }}>
-                                                                    <td className="px-2 py-2 whitespace-nowrap text-[9px] font-bold text-center" style={{ color: 'rgb(91, 152, 27)' }}>{item.id}</td>
-                                                                    <td className="px-2 py-2 whitespace-nowrap text-[9px] uppercase font-bold text-center" style={{ color: 'rgb(91, 152, 27)' }}>{item.almacen}</td>
-                                                                    <td className="px-2 py-2" style={{ color: 'rgb(91, 152, 27)' }}>
+                                                                <tr key={item.id} className="bg-white border-b border-gray-100 hover:bg-gray-50 transition-all duration-200">
+                                                                    <td className="px-2 py-2 whitespace-nowrap text-[9px] font-bold text-center text-gray-700">{item.id}</td>
+                                                                    <td className="px-2 py-2 whitespace-nowrap text-[9px] uppercase font-bold text-center text-gray-700">{item.almacen}</td>
+                                                                    <td className="px-2 py-2 text-gray-700">
                                                                         <div className="text-[9px] font-bold leading-tight uppercase">{item.producto}</div>
                                                                         <div className="text-[8px] opacity-70 font-mono mt-0.5">{item.codigo}</div>
                                                                     </td>
-                                                                    <td className="px-2 py-2 text-center text-[10px] font-bold" style={{ color: 'rgb(91, 152, 27)' }}>
+                                                                    <td className="px-2 py-2 text-center text-[10px] font-bold text-gray-700">
                                                                         {detCurrent?.cantidad_anterior ?? '-'}
                                                                     </td>
-                                                                    <td className="px-2 py-2 text-center text-[10px] font-black" style={{ color: 'rgb(91, 152, 27)' }}>
+                                                                    <td className="px-2 py-2 text-center text-[10px] font-black text-gray-700">
                                                                         {detCurrent?.cantidad_nueva ?? item.cantidad}
                                                                     </td>
                                                                     <td className="px-2 py-2 text-center">
@@ -858,23 +1061,22 @@ export default function CompararPage() {
                                                                             <ClipboardCheck className="w-3.5 h-3.5" />
                                                                         </button>
                                                                     </td>
-                                                                    <td className="px-2 py-2 text-center" style={{ color: 'rgb(91, 152, 27)' }}>
-                                                                        <span className="font-bold text-[9px] uppercase">
+                                                                    <td className="px-2 py-2 text-center text-gray-700">
+                                                                        <span className="font-normal text-[9px] uppercase">
                                                                             {item.registrado_por || 'SISTEMA'}
                                                                         </span>
                                                                     </td>
                                                                     <td className="px-2 py-2 text-center">
                                                                         <button
                                                                             onClick={() => {
-                                                                                const obs = item.observaciones || detCurrent?.observaciones || 'Sin observaciones';
-                                                                                setModalText({ title: 'Observaciones', content: obs });
+                                                                                setModalText({ title: 'Observaciones', content: observaciones });
                                                                             }}
                                                                             className="p-1.5 bg-blue-50 border border-blue-200 hover:bg-blue-100 rounded-full text-blue-600 transition-all shadow-sm active:scale-95"
                                                                         >
                                                                             <Eye className="w-3.5 h-3.5" />
                                                                         </button>
                                                                     </td>
-                                                                    <td className="px-2 py-2 text-center whitespace-nowrap text-[9px] font-medium" style={{ color: 'rgb(91, 152, 27)' }}>
+                                                                    <td className="px-2 py-2 text-center whitespace-nowrap text-[9px] font-medium text-gray-700">
                                                                         {date} <br /> {time}
                                                                     </td>
                                                                 </tr>
@@ -886,7 +1088,13 @@ export default function CompararPage() {
                                         </div>
                                         {/* Pagination Controls */}
                                         {(() => {
-                                            const filtered = historyData.filter(h => h.tipo_accion === 'EDITAR_CANTIDAD_FISICA' && h.almacen === selectedAlmacen);
+                                            const filtered = historyData
+                                                .filter(h => h.tipo_accion === 'EDITAR_CANTIDAD_FISICA' && h.almacen === selectedAlmacen)
+                                                .sort((a, b) => {
+                                                    const dateA = new Date(a.fecha_hora_raw || 0).getTime();
+                                                    const dateB = new Date(b.fecha_hora_raw || 0).getTime();
+                                                    return dateB - dateA; // Descendente: más reciente primero
+                                                });
                                             const totalPages = Math.ceil(filtered.length / itemsPerPage);
                                             if (totalPages <= 1) return null;
                                             return (
@@ -941,32 +1149,45 @@ export default function CompararPage() {
                                                 </thead>
                                                 <tbody className="divide-y divide-gray-100">
                                                     {(() => {
-                                                        const filtered = historyData.filter(h => h.tipo_accion === 'EDITAR_CANTIDAD_SISTEMA' && h.almacen === selectedAlmacen);
+                                                        const filtered = historyData
+                                                            .filter(h => h.tipo_accion === 'EDITAR_CANTIDAD_SISTEMA' && h.almacen === selectedAlmacen)
+                                                            .sort((a, b) => {
+                                                                const dateA = new Date(a.fecha_hora_raw || 0).getTime();
+                                                                const dateB = new Date(b.fecha_hora_raw || 0).getTime();
+                                                                return dateB - dateA; // Descendente: más reciente primero
+                                                            });
                                                         const paginated = filtered.slice((currentPageSistema - 1) * itemsPerPage, currentPageSistema * itemsPerPage);
 
                                                         if (filtered.length === 0) {
                                                             return (
-                                                                <tr style={{ backgroundColor: 'rgb(243, 251, 233)' }}>
-                                                                    <td colSpan={9} className="px-3 py-6 text-center text-[10px] font-bold italic" style={{ color: 'rgb(91, 152, 27)' }}>SIN MOVIMIENTOS REGISTRADOS</td>
+                                                                <tr className="bg-white">
+                                                                    <td colSpan={9} className="px-3 py-6 text-center text-[10px] font-bold italic text-gray-600">SIN MOVIMIENTOS REGISTRADOS</td>
                                                                 </tr>
                                                             );
                                                         }
 
                                                         return paginated.map((item, idx) => {
                                                             const { date, time } = formatHistoryDate(item.fecha_hora_raw);
-                                                            const detCurrent = typeof item.detalles === 'string' ? JSON.parse(item.detalles) : item.detalles;
+                                                            let detCurrent;
+                                                            try {
+                                                                detCurrent = typeof item.detalles === 'string' ? JSON.parse(item.detalles) : (item.detalles || {});
+                                                            } catch {
+                                                                detCurrent = {};
+                                                            }
+                                                            // Buscar observaciones en múltiples lugares posibles
+                                                            const observaciones = (item as any).observaciones || detCurrent?.observaciones || detCurrent?.obs || (detCurrent && typeof detCurrent === 'object' && 'observaciones' in detCurrent ? (detCurrent as any).observaciones : null) || 'Sin observaciones';
                                                             return (
-                                                                <tr key={item.id} className="border-b border-gray-100 hover:bg-white/50 transition-all duration-200" style={{ backgroundColor: 'rgb(243, 251, 233)' }}>
-                                                                    <td className="px-2 py-2 whitespace-nowrap text-[9px] font-bold text-center" style={{ color: 'rgb(91, 152, 27)' }}>{item.id}</td>
-                                                                    <td className="px-2 py-2 whitespace-nowrap text-[9px] uppercase font-bold text-center" style={{ color: 'rgb(91, 152, 27)' }}>{item.almacen}</td>
-                                                                    <td className="px-2 py-2" style={{ color: 'rgb(91, 152, 27)' }}>
+                                                                <tr key={item.id} className="bg-white border-b border-gray-100 hover:bg-gray-50 transition-all duration-200">
+                                                                    <td className="px-2 py-2 whitespace-nowrap text-[9px] font-bold text-center text-gray-700">{item.id}</td>
+                                                                    <td className="px-2 py-2 whitespace-nowrap text-[9px] uppercase font-bold text-center text-gray-700">{item.almacen}</td>
+                                                                    <td className="px-2 py-2 text-gray-700">
                                                                         <div className="text-[9px] font-bold leading-tight uppercase">{item.producto}</div>
                                                                         <div className="text-[8px] opacity-70 font-mono mt-0.5">{item.codigo}</div>
                                                                     </td>
-                                                                    <td className="px-2 py-2 text-center text-[10px] font-bold" style={{ color: 'rgb(91, 152, 27)' }}>
+                                                                    <td className="px-2 py-2 text-center text-[10px] font-bold text-gray-700">
                                                                         {detCurrent?.cantidad_anterior ?? '-'}
                                                                     </td>
-                                                                    <td className="px-2 py-2 text-center text-[10px] font-black" style={{ color: 'rgb(91, 152, 27)' }}>
+                                                                    <td className="px-2 py-2 text-center text-[10px] font-black text-gray-700">
                                                                         {detCurrent?.cantidad_nueva ?? item.cantidad}
                                                                     </td>
                                                                     <td className="px-2 py-2 text-center">
@@ -977,23 +1198,22 @@ export default function CompararPage() {
                                                                             <ClipboardCheck className="w-3.5 h-3.5" />
                                                                         </button>
                                                                     </td>
-                                                                    <td className="px-2 py-2 text-center" style={{ color: 'rgb(91, 152, 27)' }}>
-                                                                        <span className="font-bold text-[9px] uppercase">
+                                                                    <td className="px-2 py-2 text-center text-gray-700">
+                                                                        <span className="font-normal text-[9px] uppercase">
                                                                             {item.registrado_por || 'SISTEMA'}
                                                                         </span>
                                                                     </td>
                                                                     <td className="px-2 py-2 text-center">
                                                                         <button
                                                                             onClick={() => {
-                                                                                const obs = item.observaciones || detCurrent?.observaciones || 'Sin observaciones';
-                                                                                setModalText({ title: 'Observaciones', content: obs });
+                                                                                setModalText({ title: 'Observaciones', content: observaciones });
                                                                             }}
                                                                             className="p-1.5 bg-blue-50 border border-blue-200 hover:bg-blue-100 rounded-full text-blue-600 transition-all shadow-sm active:scale-95"
                                                                         >
                                                                             <Eye className="w-3.5 h-3.5" />
                                                                         </button>
                                                                     </td>
-                                                                    <td className="px-2 py-2 text-center whitespace-nowrap text-[9px] font-medium" style={{ color: 'rgb(91, 152, 27)' }}>
+                                                                    <td className="px-2 py-2 text-center whitespace-nowrap text-[9px] font-medium text-gray-700">
                                                                         {date} <br /> {time}
                                                                     </td>
                                                                 </tr>
@@ -1005,7 +1225,13 @@ export default function CompararPage() {
                                         </div>
                                         {/* Pagination Controls */}
                                         {(() => {
-                                            const filtered = historyData.filter(h => h.tipo_accion === 'EDITAR_CANTIDAD_SISTEMA' && h.almacen === selectedAlmacen);
+                                            const filtered = historyData
+                                                .filter(h => h.tipo_accion === 'EDITAR_CANTIDAD_SISTEMA' && h.almacen === selectedAlmacen)
+                                                .sort((a, b) => {
+                                                    const dateA = new Date(a.fecha_hora_raw || 0).getTime();
+                                                    const dateB = new Date(b.fecha_hora_raw || 0).getTime();
+                                                    return dateB - dateA; // Descendente: más reciente primero
+                                                });
                                             const totalPages = Math.ceil(filtered.length / itemsPerPage);
                                             if (totalPages <= 1) return null;
                                             return (
@@ -1059,49 +1285,60 @@ export default function CompararPage() {
                                                 </thead>
                                                 <tbody className="divide-y divide-gray-100">
                                                     {(() => {
-                                                        const filtered = historyData.filter(h => h.tipo_accion === 'VERIFICACION' && h.almacen === selectedAlmacen);
+                                                        const filtered = historyData
+                                                            .filter(h => h.tipo_accion === 'VERIFICACION' && h.almacen === selectedAlmacen)
+                                                            .sort((a, b) => {
+                                                                const dateA = new Date(a.fecha_hora_raw || 0).getTime();
+                                                                const dateB = new Date(b.fecha_hora_raw || 0).getTime();
+                                                                return dateB - dateA; // Descendente: más reciente primero
+                                                            });
                                                         const paginated = filtered.slice((currentPageVerificacion - 1) * itemsPerPage, currentPageVerificacion * itemsPerPage);
 
                                                         if (filtered.length === 0) {
                                                             return (
-                                                                <tr style={{ backgroundColor: 'rgb(243, 251, 233)' }}>
-                                                                    <td colSpan={8} className="px-3 py-6 text-center text-[10px] font-black italic uppercase" style={{ color: 'rgb(91, 152, 27)' }}>SIN VERIFICACIONES REGISTRADAS</td>
+                                                                <tr className="bg-white">
+                                                                    <td colSpan={8} className="px-3 py-6 text-center text-[10px] font-black italic uppercase text-gray-600">SIN VERIFICACIONES REGISTRADAS</td>
                                                                 </tr>
                                                             );
                                                         }
 
                                                         return paginated.map((item, idx) => {
                                                             const { date, time } = formatHistoryDate(item.fecha_hora_raw);
-                                                            const det = typeof item.detalles === 'string' ? {} : (item.detalles || {});
-
+                                                            let det;
+                                                            try {
+                                                                det = typeof item.detalles === 'string' ? JSON.parse(item.detalles) : (item.detalles || {});
+                                                            } catch {
+                                                                det = {};
+                                                            }
+                                                            // Buscar observaciones en múltiples lugares posibles para verificaciones
+                                                            const observaciones = (item as any).observaciones || det?.obs_verificacion || det?.observaciones || (det && typeof det === 'object' && 'observaciones' in det ? (det as any).observaciones : null) || 'Sin observaciones';
                                                             return (
-                                                                <tr key={item.id} className="border-b border-gray-100 hover:bg-white/50 transition-all duration-200" style={{ backgroundColor: 'rgb(243, 251, 233)' }}>
-                                                                    <td className="px-3 py-2 whitespace-nowrap text-[9px] font-bold text-center" style={{ color: 'rgb(91, 152, 27)' }}>{item.id}</td>
-                                                                    <td className="px-3 py-2 whitespace-nowrap text-[9px] uppercase font-bold text-center" style={{ color: 'rgb(91, 152, 27)' }}>{item.almacen}</td>
-                                                                    <td className="px-3 py-2" style={{ color: 'rgb(91, 152, 27)' }}>
+                                                                <tr key={item.id} className="bg-white border-b border-gray-100 hover:bg-gray-50 transition-all duration-200">
+                                                                    <td className="px-3 py-2 whitespace-nowrap text-[9px] font-bold text-center text-gray-700">{item.id}</td>
+                                                                    <td className="px-3 py-2 whitespace-nowrap text-[9px] uppercase font-bold text-center text-gray-700">{item.almacen}</td>
+                                                                    <td className="px-3 py-2 text-gray-700">
                                                                         <div className="text-[9px] font-bold leading-tight uppercase">{item.producto}</div>
                                                                         <div className="text-[8px] opacity-70 font-mono mt-0.5">{item.codigo}</div>
                                                                     </td>
-                                                                    <td className="px-3 py-2 text-center text-[10px] font-bold" style={{ color: 'rgb(91, 152, 27)' }}>
+                                                                    <td className="px-3 py-2 text-center text-[10px] font-bold text-gray-700">
                                                                         {det.numero_acta || '-'}
                                                                     </td>
-                                                                    <td className="px-3 py-2 text-center" style={{ color: 'rgb(91, 152, 27)' }}>
-                                                                        <span className="font-bold text-[9px] uppercase">
+                                                                    <td className="px-3 py-2 text-center text-gray-700">
+                                                                        <span className="font-normal text-[9px] uppercase">
                                                                             {item.registrado_por || 'SISTEMA'}
                                                                         </span>
                                                                     </td>
                                                                     <td className="px-3 py-2 text-center">
                                                                         <button
                                                                             onClick={() => {
-                                                                                const obs = item.observaciones || det.obs_verificacion || 'Sin observaciones';
-                                                                                setModalText({ title: 'Observaciones de Verificación', content: obs });
+                                                                                setModalText({ title: 'Observaciones de Verificación', content: observaciones });
                                                                             }}
                                                                             className="p-1.5 bg-blue-50 border border-blue-200 hover:bg-blue-100 rounded-full text-blue-600 transition-all shadow-sm active:scale-95"
                                                                         >
                                                                             <Eye className="w-3.5 h-3.5" />
                                                                         </button>
                                                                     </td>
-                                                                    <td className="px-3 py-2 text-center whitespace-nowrap text-[9px] font-medium" style={{ color: 'rgb(91, 152, 27)' }}>
+                                                                    <td className="px-3 py-2 text-center whitespace-nowrap text-[9px] font-medium text-gray-700">
                                                                         {date} <br /> {time}
                                                                     </td>
                                                                     <td className="px-3 py-2 text-center">
@@ -1121,7 +1358,13 @@ export default function CompararPage() {
                                         </div>
                                         {/* Pagination Controls */}
                                         {(() => {
-                                            const filtered = historyData.filter(h => h.tipo_accion === 'VERIFICACION' && h.almacen === selectedAlmacen);
+                                            const filtered = historyData
+                                                .filter(h => h.tipo_accion === 'VERIFICACION' && h.almacen === selectedAlmacen)
+                                                .sort((a, b) => {
+                                                    const dateA = new Date(a.fecha_hora_raw || 0).getTime();
+                                                    const dateB = new Date(b.fecha_hora_raw || 0).getTime();
+                                                    return dateB - dateA; // Descendente: más reciente primero
+                                                });
                                             const totalPages = Math.ceil(filtered.length / itemsPerPage);
                                             if (totalPages <= 1) return null;
                                             return (
@@ -1164,14 +1407,14 @@ export default function CompararPage() {
             {
                 showPasswordModal && (
                     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[10000] flex items-center justify-center p-4">
-                        <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200 border border-gray-100">
-                            <div className="p-8 text-center space-y-6">
-                                <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mx-auto text-blue-600 shadow-sm border border-blue-100">
-                                    <ShieldCheck className="w-8 h-8" />
+                        <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-200 border border-gray-100">
+                            <div className="p-6 text-center space-y-5">
+                                <div className="w-14 h-14 bg-blue-50 rounded-full flex items-center justify-center mx-auto text-blue-600 shadow-sm border border-blue-100">
+                                    <ShieldCheck className="w-7 h-7" />
                                 </div>
                                 <div className="space-y-2">
-                                    <h1 className="text-2xl font-black text-gray-900 tracking-tight uppercase">Seguridad Requerida</h1>
-                                    <p className="text-sm text-gray-500 font-medium">Ingrese la contraseña del jefe para continuar con la verificación técnica</p>
+                                    <h1 className="text-xl font-black text-gray-900 tracking-tight uppercase">Seguridad Requerida</h1>
+                                    <p className="text-xs text-gray-500 font-medium">Ingrese la contraseña del jefe para continuar con la verificación técnica</p>
                                 </div>
                                 <div className="relative group">
                                     {/* Hack para evitar autofill */}
@@ -1180,7 +1423,7 @@ export default function CompararPage() {
                                         type="password"
                                         autoComplete="new-password"
                                         name="password_field_no_autofill"
-                                        className="w-full p-4 bg-gray-50 border-2 border-gray-100 rounded-2xl text-center text-2xl font-black tracking-[0.5em] focus:border-blue-500 focus:bg-white outline-none transition-all placeholder:text-gray-300 placeholder:tracking-normal"
+                                        className="w-full p-3 bg-gray-50 border-2 border-gray-100 rounded-2xl text-center text-xl font-black tracking-[0.5em] focus:border-blue-500 focus:bg-white outline-none transition-all placeholder:text-gray-300 placeholder:tracking-normal"
                                         placeholder="••••"
                                         value={password}
                                         onChange={(e) => setPassword(e.target.value)}
@@ -1191,13 +1434,13 @@ export default function CompararPage() {
                                 <div className="flex gap-3 pt-2">
                                     <button
                                         onClick={() => setShowPasswordModal(false)}
-                                        className="flex-1 px-6 py-3.5 bg-gray-100 text-gray-500 font-black rounded-2xl hover:bg-gray-200 transition-all uppercase text-xs tracking-wider"
+                                        className="flex-1 px-5 py-2.5 bg-gray-100 text-gray-500 font-black rounded-full hover:bg-gray-200 transition-all uppercase text-xs tracking-wider"
                                     >
                                         Cancelar
                                     </button>
                                     <button
                                         onClick={handlePasswordConfirm}
-                                        className="flex-1 px-6 py-3.5 bg-[#0B3B8C] text-white font-black rounded-2xl hover:bg-blue-900 transition-all shadow-lg hover:shadow-blue-200 uppercase text-xs tracking-wider"
+                                        className="flex-1 px-5 py-2.5 bg-[#0B3B8C] text-white font-black rounded-full hover:bg-blue-900 transition-all shadow-lg hover:shadow-blue-200 uppercase text-xs tracking-wider"
                                     >
                                         Verificar
                                     </button>
@@ -1247,7 +1490,10 @@ export default function CompararPage() {
                                                     type="number"
                                                     className="w-full p-2.5 border-2 border-gray-100 rounded-xl focus:border-blue-500 outline-none font-black text-gray-700 text-sm transition-all"
                                                     value={editForm.cantidad}
-                                                    onChange={(e) => setEditForm({ ...editForm, cantidad: Number(e.target.value) })}
+                                                    onChange={(e) => {
+                                                        const value = e.target.value;
+                                                        setEditForm({ ...editForm, cantidad: value === '' ? '' : Number(value) });
+                                                    }}
                                                 />
                                             </div>
                                             <div className="relative">
@@ -1291,32 +1537,64 @@ export default function CompararPage() {
 
                                         <div className="grid grid-cols-2 gap-4">
                                             <div className="relative">
-                                                <label className="absolute -top-2.5 left-3 px-1.5 bg-white text-[10px] font-black text-gray-400 uppercase tracking-wider">Operador Responsable</label>
+                                                <label className="absolute -top-2.5 left-3 px-1.5 bg-white text-[10px] font-black text-gray-400 uppercase tracking-wider">Registrado por</label>
                                                 <select
                                                     className="w-full p-2.5 border-2 border-gray-100 rounded-xl bg-white font-black text-gray-700 outline-none focus:border-blue-500 appearance-none transition-all text-sm"
                                                     value={editForm.registrado_por}
-                                                    onChange={(e) => setEditForm({ ...editForm, registrado_por: e.target.value })}
+                                                    onChange={(e) => setEditForm({ ...editForm, registrado_por: e.target.value, registrado_por_otro: e.target.value === 'Otros' ? editForm.registrado_por_otro : '' })}
                                                 >
                                                     <option value="">Seleccionar...</option>
+                                                    <option value="Victor">Victor</option>
                                                     <option value="Joseph">Joseph</option>
-                                                    <option value="Joselyn">Joselyn</option>
+                                                    <option value="Hervin">Hervin</option>
+                                                    <option value="Kimberly">Kimberly</option>
                                                     <option value="Otros">Otros</option>
                                                 </select>
                                             </div>
                                             <div className="relative">
-                                                <label className="absolute -top-2.5 left-3 px-1.5 bg-white text-[10px] font-black text-gray-400 uppercase tracking-wider">Origen del Error</label>
+                                                <label className="absolute -top-2.5 left-3 px-1.5 bg-white text-[10px] font-black text-gray-400 uppercase tracking-wider">Error de</label>
                                                 <select
                                                     className="w-full p-2.5 border-2 border-gray-100 rounded-xl bg-white font-black text-gray-700 outline-none focus:border-blue-500 appearance-none transition-all text-sm"
                                                     value={editForm.error_de}
-                                                    onChange={(e) => setEditForm({ ...editForm, error_de: e.target.value })}
+                                                    onChange={(e) => setEditForm({ ...editForm, error_de: e.target.value, error_de_otro: e.target.value === 'Otros' ? editForm.error_de_otro : '' })}
                                                 >
                                                     <option value="">Seleccionar...</option>
+                                                    <option value="Victor">Victor</option>
                                                     <option value="Joseph">Joseph</option>
-                                                    <option value="Joselyn">Joselyn</option>
+                                                    <option value="Hervin">Hervin</option>
+                                                    <option value="Kimberly">Kimberly</option>
                                                     <option value="Otros">Otros</option>
                                                 </select>
                                             </div>
                                         </div>
+                                        
+                                        {/* Input condicional para Registrado por - Otros */}
+                                        {editForm.registrado_por === 'Otros' && (
+                                            <div className="relative animate-in slide-in-from-top-2 duration-200">
+                                                <label className="absolute -top-2.5 left-3 px-1.5 bg-white text-[10px] font-black text-gray-400 uppercase tracking-wider">Especifique Registrado por</label>
+                                                <input
+                                                    type="text"
+                                                    className="w-full p-2.5 border-2 border-gray-100 rounded-xl focus:border-blue-500 outline-none font-black text-gray-700 transition-all border-dashed text-sm"
+                                                    value={editForm.registrado_por_otro}
+                                                    onChange={(e) => setEditForm({ ...editForm, registrado_por_otro: e.target.value })}
+                                                    placeholder="Ingrese el nombre..."
+                                                />
+                                            </div>
+                                        )}
+                                        
+                                        {/* Input condicional para Error de - Otros */}
+                                        {editForm.error_de === 'Otros' && (
+                                            <div className="relative animate-in slide-in-from-top-2 duration-200">
+                                                <label className="absolute -top-2.5 left-3 px-1.5 bg-white text-[10px] font-black text-gray-400 uppercase tracking-wider">Especifique Error de</label>
+                                                <input
+                                                    type="text"
+                                                    className="w-full p-2.5 border-2 border-gray-100 rounded-xl focus:border-blue-500 outline-none font-black text-gray-700 transition-all border-dashed text-sm"
+                                                    value={editForm.error_de_otro}
+                                                    onChange={(e) => setEditForm({ ...editForm, error_de_otro: e.target.value })}
+                                                    placeholder="Ingrese el nombre..."
+                                                />
+                                            </div>
+                                        )}
                                         <div className="relative">
                                             <label className="absolute -top-2.5 left-3 px-1.5 bg-white text-[10px] font-black text-gray-400 uppercase tracking-wider">Notas y Observaciones</label>
                                             <textarea
@@ -1331,83 +1609,74 @@ export default function CompararPage() {
 
                                 {activeModal === 'verificacion' && (
                                     <div className="space-y-6 animate-in fade-in duration-500">
-                                        {/* SECTION 1: COMPRAS */}
+                                        {/* SECTION 1: COMPRAS Y VENTAS */}
                                         <div className="bg-white border-2 border-gray-100 rounded-[18px] overflow-hidden shadow-sm transition-all hover:shadow-md">
                                             <div className="bg-[#0061F2] p-2 px-4 font-black text-white text-[11px] uppercase flex items-center gap-2">
                                                 <div className="w-6 h-2 bg-white/30 rounded-full"></div>
-                                                1. SECCIÓN COMPRAS
+                                                COMPRAS Y VENTAS
                                             </div>
-                                            <div className="p-4 space-y-3">
-                                                <div className="grid grid-cols-2 gap-4">
-                                                    <div className="relative group">
-                                                        <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#0061F2] transition-all">Fecha ingreso</label>
-                                                        <input type="date" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#0061F2] h-[40px] transition-all bg-white"
-                                                            value={verificacionForm.fecha_ingreso_compra}
-                                                            onChange={(e) => setVerificacionForm({ ...verificacionForm, fecha_ingreso_compra: e.target.value })} />
+                                            <div className="p-4">
+                                                <div className="grid grid-cols-2 gap-6">
+                                                    {/* COLUMNA COMPRAS */}
+                                                    <div className="space-y-3">
+                                                        <div className="relative group">
+                                                            <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#0061F2] transition-all">Fecha ingreso inventario</label>
+                                                            <input type="date" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#0061F2] h-[40px] transition-all bg-white"
+                                                                value={verificacionForm.fecha_ingreso_compra}
+                                                                onChange={(e) => setVerificacionForm({ ...verificacionForm, fecha_ingreso_compra: e.target.value })} />
+                                                        </div>
+                                                        <div className="relative group">
+                                                            <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#0061F2] transition-all">Hora ingreso</label>
+                                                            <input type="time" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#0061F2] h-[40px] transition-all bg-white"
+                                                                value={verificacionForm.hora_ingreso_compra}
+                                                                onChange={(e) => setVerificacionForm({ ...verificacionForm, hora_ingreso_compra: e.target.value })} />
+                                                        </div>
+                                                        <div className="relative group">
+                                                            <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#0061F2] transition-all">Número de acta</label>
+                                                            <input type="text" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#0061F2] h-[40px] transition-all bg-white"
+                                                                value={verificacionForm.numero_acta}
+                                                                onChange={(e) => setVerificacionForm({ ...verificacionForm, numero_acta: e.target.value })} />
+                                                        </div>
+                                                        <div className="relative group">
+                                                            <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#0061F2] transition-all">Fecha descarga inventario</label>
+                                                            <input type="date" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#0061F2] h-[40px] transition-all bg-white"
+                                                                value={verificacionForm.fecha_descarga_compra}
+                                                                onChange={(e) => setVerificacionForm({ ...verificacionForm, fecha_descarga_compra: e.target.value })} />
+                                                        </div>
+                                                        <div className="relative group">
+                                                            <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#0061F2] transition-all">Hora descarga inventario</label>
+                                                            <input type="time" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#0061F2] h-[40px] transition-all bg-white"
+                                                                value={verificacionForm.hora_descarga_compra}
+                                                                onChange={(e) => setVerificacionForm({ ...verificacionForm, hora_descarga_compra: e.target.value })} />
+                                                        </div>
                                                     </div>
-                                                    <div className="relative group">
-                                                        <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#0061F2] transition-all">Hora ingreso</label>
-                                                        <input type="time" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#0061F2] h-[40px] transition-all bg-white"
-                                                            value={verificacionForm.hora_ingreso_compra}
-                                                            onChange={(e) => setVerificacionForm({ ...verificacionForm, hora_ingreso_compra: e.target.value })} />
-                                                    </div>
-                                                </div>
-                                                <div className="relative group">
-                                                    <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#0061F2] transition-all">Número de acta</label>
-                                                    <input type="text" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#0061F2] h-[40px] transition-all bg-white"
-                                                        value={verificacionForm.numero_acta}
-                                                        onChange={(e) => setVerificacionForm({ ...verificacionForm, numero_acta: e.target.value })} />
-                                                </div>
-                                                <div className="grid grid-cols-2 gap-4">
-                                                    <div className="relative group">
-                                                        <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#0061F2] transition-all">Fecha descarga</label>
-                                                        <input type="date" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#0061F2] h-[40px] transition-all bg-white"
-                                                            value={verificacionForm.fecha_descarga_compra}
-                                                            onChange={(e) => setVerificacionForm({ ...verificacionForm, fecha_descarga_compra: e.target.value })} />
-                                                    </div>
-                                                    <div className="relative group">
-                                                        <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#0061F2] transition-all">Hora descarga</label>
-                                                        <input type="time" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#0061F2] h-[40px] transition-all bg-white"
-                                                            value={verificacionForm.hora_descarga_compra}
-                                                            onChange={(e) => setVerificacionForm({ ...verificacionForm, hora_descarga_compra: e.target.value })} />
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        {/* SECTION 2: VENTAS */}
-                                        <div className="bg-white border-2 border-gray-100 rounded-[18px] overflow-hidden shadow-sm transition-all hover:shadow-md">
-                                            <div className="bg-[#6610f2] p-2 px-4 font-black text-white text-[11px] uppercase flex items-center gap-2">
-                                                <div className="w-6 h-2 bg-white/30 rounded-full"></div>
-                                                2. SECCIÓN VENTAS
-                                            </div>
-                                            <div className="p-4 space-y-3">
-                                                <div className="grid grid-cols-2 gap-4">
-                                                    <div className="relative group">
-                                                        <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#6610f2] transition-all">Fecha descarga ventas</label>
-                                                        <input type="date" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#6610f2] h-[40px] transition-all bg-white"
-                                                            value={verificacionForm.fecha_descarga_ventas}
-                                                            onChange={(e) => setVerificacionForm({ ...verificacionForm, fecha_descarga_ventas: e.target.value })} />
-                                                    </div>
-                                                    <div className="relative group">
-                                                        <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#6610f2] transition-all">Hora descarga ventas</label>
-                                                        <input type="time" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#6610f2] h-[40px] transition-all bg-white"
-                                                            value={verificacionForm.hora_descarga_ventas}
-                                                            onChange={(e) => setVerificacionForm({ ...verificacionForm, hora_descarga_ventas: e.target.value })} />
-                                                    </div>
-                                                </div>
-                                                <div className="grid grid-cols-2 gap-4">
-                                                    <div className="relative group">
-                                                        <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#6610f2] transition-all">Fecha descarga sistema</label>
-                                                        <input type="date" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#6610f2] h-[40px] transition-all bg-white"
-                                                            value={verificacionForm.fecha_descarga_sistema}
-                                                            onChange={(e) => setVerificacionForm({ ...verificacionForm, fecha_descarga_sistema: e.target.value })} />
-                                                    </div>
-                                                    <div className="relative group">
-                                                        <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#6610f2] transition-all">Hora descarga sistema</label>
-                                                        <input type="time" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#6610f2] h-[40px] transition-all bg-white"
-                                                            value={verificacionForm.hora_descarga_sistema}
-                                                            onChange={(e) => setVerificacionForm({ ...verificacionForm, hora_descarga_sistema: e.target.value })} />
+                                                    
+                                                    {/* COLUMNA VENTAS */}
+                                                    <div className="space-y-3">
+                                                        <div className="relative group">
+                                                            <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#6610f2] transition-all">Fecha descarga ventas</label>
+                                                            <input type="date" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#6610f2] h-[40px] transition-all bg-white"
+                                                                value={verificacionForm.fecha_descarga_ventas}
+                                                                onChange={(e) => setVerificacionForm({ ...verificacionForm, fecha_descarga_ventas: e.target.value })} />
+                                                        </div>
+                                                        <div className="relative group">
+                                                            <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#6610f2] transition-all">Hora descarga ventas</label>
+                                                            <input type="time" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#6610f2] h-[40px] transition-all bg-white"
+                                                                value={verificacionForm.hora_descarga_ventas}
+                                                                onChange={(e) => setVerificacionForm({ ...verificacionForm, hora_descarga_ventas: e.target.value })} />
+                                                        </div>
+                                                        <div className="relative group">
+                                                            <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#6610f2] transition-all">Fecha descarga sistema</label>
+                                                            <input type="date" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#6610f2] h-[40px] transition-all bg-white"
+                                                                value={verificacionForm.fecha_descarga_sistema}
+                                                                onChange={(e) => setVerificacionForm({ ...verificacionForm, fecha_descarga_sistema: e.target.value })} />
+                                                        </div>
+                                                        <div className="relative group">
+                                                            <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#6610f2] transition-all">Hora descarga sistema</label>
+                                                            <input type="time" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#6610f2] h-[40px] transition-all bg-white"
+                                                                value={verificacionForm.hora_descarga_sistema}
+                                                                onChange={(e) => setVerificacionForm({ ...verificacionForm, hora_descarga_sistema: e.target.value })} />
+                                                        </div>
                                                     </div>
                                                 </div>
                                             </div>
@@ -1540,8 +1809,8 @@ export default function CompararPage() {
                                         {/* Left side: PDF Download */}
                                         <div className="flex-shrink-0">
                                             <button
-                                                onClick={() => window.open(`${API_BASE_URL}/?action=descargar_verificacion_pdf&id=${selectedItem?.id}`, '_blank')}
-                                                className="flex items-center gap-1.5 px-3 py-1.5 bg-white border-2 border-[#0B3B8C] text-[#0B3B8C] rounded-lg font-black hover:bg-blue-50 transition-all text-[10px] shadow-sm uppercase tracking-wide active:scale-95"
+                                                onClick={handleDownloadVerificationPDF}
+                                                className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white rounded-full font-black hover:bg-red-700 transition-all text-[10px] shadow-sm uppercase tracking-wide active:scale-95"
                                             >
                                                 <FileDown className="w-3.5 h-3.5" />
                                                 <span>PDF Reporte</span>
@@ -1549,7 +1818,7 @@ export default function CompararPage() {
                                         </div>
 
                                         {/* Right side: Responsable */}
-                                        <div className="relative w-48">
+                                        <div className="relative flex-1 max-w-xs">
                                             <label className="absolute -top-2 left-3 px-1.5 bg-white text-[9px] font-black text-gray-400 uppercase tracking-wider">Responsable</label>
                                             <input
                                                 type="text"
@@ -1566,9 +1835,10 @@ export default function CompararPage() {
                                 <div className={`flex justify-end gap-3 ${activeModal === 'verificacion' ? 'pt-4 border-t border-gray-100' : ''}`}>
                                     <button
                                         onClick={() => setActiveModal(null)}
-                                        className="px-6 py-2 bg-gray-50 border border-gray-200 text-gray-500 font-black rounded-lg hover:bg-gray-100 hover:text-gray-600 transition-all text-[11px] uppercase tracking-wide active:scale-95"
+                                        disabled={isSubmittingEdit}
+                                        className="px-6 py-2 bg-gray-50 border border-gray-200 text-gray-500 font-black rounded-full hover:bg-gray-100 hover:text-gray-600 transition-all text-[11px] uppercase tracking-wide active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                                     >
-                                        Cerrar
+                                        Cancelar
                                     </button>
                                     <button
                                         onClick={async () => {
@@ -1578,9 +1848,20 @@ export default function CompararPage() {
                                                 handleSubmitEdit();
                                             }
                                         }}
-                                        className="px-8 py-2 bg-[#0B3B8C] text-white font-black rounded-lg hover:bg-blue-900 transition-all shadow-md flex items-center gap-2 text-[11px] uppercase tracking-widest active:scale-95"
+                                        disabled={isSubmittingEdit}
+                                        className="px-8 py-2 bg-[#0B3B8C] text-white font-black rounded-full hover:bg-blue-900 transition-all shadow-md flex items-center gap-2 text-[11px] uppercase tracking-widest active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                                     >
-                                        <Save className="w-4 h-4" /> Guardar
+                                        {isSubmittingEdit ? (
+                                            <>
+                                                <Loader2 className="w-4 h-4 animate-spin" />
+                                                <span>Guardando...</span>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Save className="w-4 h-4" />
+                                                <span>Guardar</span>
+                                            </>
+                                        )}
                                     </button>
                                 </div>
                             </div>

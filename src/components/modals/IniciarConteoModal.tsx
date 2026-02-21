@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import Modal from '../Modal';
 import { useInventory, fmt12 } from '@/context/InventoryContext';
-import { ClipboardCheck, Save, Store } from 'lucide-react';
+import { ClipboardCheck, Save, Store, Loader2 } from 'lucide-react';
 
 interface Props {
     isOpen: boolean;
@@ -24,11 +24,21 @@ const TIENDAS_MAP = [
 
 export default function IniciarConteoModal({ isOpen, onClose, almacen, tipo, onConfirm, activeCounts }: Props) {
     const { state, showAlert } = useInventory();
+    const [loading, setLoading] = useState(false);
+    const [tiendasProcesando, setTiendasProcesando] = useState<Set<string>>(new Set());
+    
+    const separarFechaHora = (fechaCompleta: string) => {
+        // Formato: "DD/MM/YYYY HH:MM:SS"
+        const [fecha, hora] = fechaCompleta.split(' ');
+        return { fecha: fecha || '', hora: hora || '' };
+    };
+
     const [formData, setFormData] = useState({
         numero: state.sesionActual.numero || '',
         registrado: 'Joseph',
         otro: '',
-        inicio: fmt12(),
+        fecha: '',
+        hora: '',
         tienda: '',
         tienda_id: null as number | null
     });
@@ -36,21 +46,26 @@ export default function IniciarConteoModal({ isOpen, onClose, almacen, tipo, onC
     useEffect(() => {
         let timer: NodeJS.Timeout;
         if (isOpen) {
+            const fechaCompleta = fmt12();
+            const { fecha, hora } = separarFechaHora(fechaCompleta);
             setFormData(prev => ({
                 ...prev,
                 numero: state.sesionActual.numero || '',
-                inicio: fmt12()
+                fecha,
+                hora
             }));
 
             // Reloj en tiempo real mientras el modal esté abierto
             timer = setInterval(() => {
-                setFormData(prev => ({ ...prev, inicio: fmt12() }));
+                const fechaCompleta = fmt12();
+                const { fecha, hora } = separarFechaHora(fechaCompleta);
+                setFormData(prev => ({ ...prev, fecha, hora }));
             }, 1000);
         }
         return () => clearInterval(timer);
     }, [isOpen, state.sesionActual.numero]);
 
-    const handleSave = () => {
+    const handleSave = async () => {
         if (!formData.numero.trim()) {
             showAlert('Validación', 'El número de inventario es obligatorio.', 'warning');
             return;
@@ -70,12 +85,28 @@ export default function IniciarConteoModal({ isOpen, onClose, almacen, tipo, onC
             return;
         }
 
-        onConfirm({
-            ...formData,
-            registrado: registradoFinal,
-            tipo,
-            almacen
-        });
+        // Prevenir múltiples clicks por tienda
+        const tiendaKey = almacen === 'Malvinas' ? formData.tienda : 'Callao';
+        if (tiendasProcesando.has(tiendaKey)) {
+            return;
+        }
+
+        setLoading(true);
+        setTiendasProcesando(prev => new Set(prev).add(tiendaKey));
+
+        try {
+            const inicio = `${formData.fecha} ${formData.hora}`;
+            await onConfirm({
+                ...formData,
+                inicio,
+                registrado: registradoFinal,
+                tipo,
+                almacen
+            });
+        } finally {
+            setLoading(false);
+            // No removemos de tiendasProcesando para mantener el estado de "ya procesado"
+        }
     };
 
     return (
@@ -86,32 +117,51 @@ export default function IniciarConteoModal({ isOpen, onClose, almacen, tipo, onC
             size="lg"
             footer={
                 <div className="flex justify-end gap-3">
-                    <button className="px-6 py-2 bg-gray-500 text-white rounded-xl font-bold hover:bg-gray-600 transition-all" onClick={onClose}>
+                    <button 
+                        className="px-6 py-2 bg-gray-500 text-white rounded-full font-bold hover:bg-gray-600 transition-all" 
+                        onClick={onClose}
+                        disabled={loading}
+                    >
                         Cancelar
                     </button>
-                    <button className="px-6 py-2 bg-[#0B3B8C] text-white rounded-xl font-bold flex items-center gap-2 hover:bg-[#002D5A] transition-all" onClick={handleSave}>
-                        <Save className="w-4 h-4" />
-                        <span>Guardar</span>
+                    <button 
+                        className="px-6 py-2 bg-[#0B3B8C] text-white rounded-full font-bold flex items-center gap-2 hover:bg-[#002D5A] transition-all disabled:opacity-50 disabled:cursor-not-allowed" 
+                        onClick={handleSave}
+                        disabled={loading || (almacen === 'Malvinas' && tiendasProcesando.has(formData.tienda))}
+                    >
+                        {loading ? (
+                            <>
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                                <span>Guardando...</span>
+                            </>
+                        ) : (
+                            <>
+                                <Save className="w-4 h-4" />
+                                <span>Guardar</span>
+                            </>
+                        )}
                     </button>
                 </div>
             }
         >
             <div className="space-y-6">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="relative">
-                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 absolute -top-2 left-3 bg-white px-1 z-10">Número de Inventario</label>
+                <div className="grid grid-cols-2 gap-4">
+                    {/* Fila 1 - Columna 1: Número de Inventario */}
+                    <div className="space-y-1">
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase">Número de Inventario</label>
                         <input
                             type="text"
-                            className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-gray-600 font-bold focus:outline-none focus:border-[#0B3B8C] transition-all"
+                            className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-gray-600 text-xs font-medium focus:outline-none focus:border-[#0B3B8C] transition-all"
                             value={formData.numero}
                             disabled
                         />
                     </div>
 
-                    <div className="relative">
-                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 absolute -top-2 left-3 bg-white px-1 z-10">Registrado por</label>
+                    {/* Fila 1 - Columna 2: Registrado por */}
+                    <div className="space-y-1 relative">
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase">Registrado por</label>
                         <select
-                            className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl text-gray-700 font-bold focus:outline-none focus:border-[#0B3B8C] appearance-none transition-all cursor-pointer"
+                            className="w-full px-3 py-2 bg-white border border-gray-200 rounded-xl text-gray-700 text-xs font-medium focus:outline-none focus:border-[#0B3B8C] appearance-none transition-all cursor-pointer"
                             value={formData.registrado}
                             onChange={(e) => setFormData({ ...formData, registrado: e.target.value })}
                         >
@@ -120,28 +170,40 @@ export default function IniciarConteoModal({ isOpen, onClose, almacen, tipo, onC
                             <option value="Manuel">Manuel</option>
                             <option value="Otro">Otro</option>
                         </select>
-                        <div className="absolute right-3 top-4 pointer-events-none">
+                        <div className="absolute right-3 top-8 pointer-events-none">
                             <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
                         </div>
                     </div>
 
-                    <div className="relative">
-                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 absolute -top-2 left-3 bg-white px-1 z-10">Fecha y Hora (inicio)</label>
+                    {/* Fila 2 - Columna 1: Fecha inicio */}
+                    <div className="space-y-1">
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase">Fecha inicio</label>
                         <input
                             type="text"
-                            className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-gray-600 font-bold focus:outline-none transition-all"
-                            value={formData.inicio}
+                            className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-gray-600 text-xs font-medium focus:outline-none transition-all"
+                            value={formData.fecha}
+                            disabled
+                        />
+                    </div>
+
+                    {/* Fila 2 - Columna 2: Hora inicio */}
+                    <div className="space-y-1">
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase">Hora inicio</label>
+                        <input
+                            type="text"
+                            className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-gray-600 text-xs font-medium focus:outline-none transition-all"
+                            value={formData.hora}
                             disabled
                         />
                     </div>
                 </div>
 
                 {formData.registrado === 'Otro' && (
-                    <div className="relative animate-in slide-in-from-top-2 duration-300">
-                        <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1 absolute -top-2 left-3 bg-white px-1 z-10">Especifique Nombre</label>
+                    <div className="space-y-1 animate-in slide-in-from-top-2 duration-300">
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase">Especifique Nombre</label>
                         <input
                             type="text"
-                            className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl text-gray-700 font-bold focus:outline-none focus:border-[#0B3B8C] transition-all"
+                            className="w-full px-3 py-2 bg-white border border-gray-200 rounded-xl text-gray-700 text-xs font-medium focus:outline-none focus:border-[#0B3B8C] transition-all"
                             placeholder="Nombre del registrador"
                             value={formData.otro}
                             onChange={(e) => setFormData({ ...formData, otro: e.target.value })}
