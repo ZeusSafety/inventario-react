@@ -58,7 +58,7 @@ export default function ConsolidadoPage() {
 
         setLoading(true);
         setFetchError(null);
-        
+
         try {
             // Timeout normal (60 segundos) - el backend ahora está optimizado
             const data = await apiCall(`obtener_consolidados_completos&inventario_id=${inventoryId}`);
@@ -66,9 +66,9 @@ export default function ConsolidadoPage() {
             if (data.success) {
                 const callaoConsolidado = data.callao?.consolidado || [];
                 const malvinasConsolidado = data.malvinas?.consolidado || [];
-                
+
                 console.log('Datos recibidos - Callao:', callaoConsolidado.length, 'Malvinas:', malvinasConsolidado.length);
-                
+
                 // Crear mapa de Malvinas una sola vez (optimizado)
                 const malvinasMap = new Map<string, ConsolidadoItem>();
                 malvinasConsolidado.forEach((item: ConsolidadoItem) => {
@@ -77,11 +77,11 @@ export default function ConsolidadoPage() {
                         malvinasMap.set(codigo, item);
                     }
                 });
-                
+
                 // Ordenar Malvinas según el orden de Callao
                 const sortedMalvinasData: ConsolidadoItem[] = [];
                 const malvinasMapCopy = new Map(malvinasMap); // Copia para no modificar el original
-                
+
                 // Primero agregar los productos que están en Callao, en el mismo orden
                 callaoConsolidado.forEach((callaoItem: ConsolidadoItem) => {
                     const codigo = String(callaoItem.codigo || '').trim().toUpperCase();
@@ -91,30 +91,30 @@ export default function ConsolidadoPage() {
                         malvinasMapCopy.delete(codigo);
                     }
                 });
-                
+
                 // Luego agregar los productos que solo están en Malvinas (al final)
                 malvinasMapCopy.forEach((item) => {
                     sortedMalvinasData.push(item);
                 });
-                
+
                 // Construir Conteo General de forma optimizada (usando el mapa original)
                 const sortedGeneralData: ConsolidadoItem[] = [];
-                
+
                 // Procesar productos de Callao (en su orden)
                 callaoConsolidado.forEach((callaoItem: ConsolidadoItem) => {
                     const codigo = String(callaoItem.codigo || '').trim().toUpperCase();
                     const malvinasItem = malvinasMap.get(codigo);
-                    
+
                     // Calcular totales
                     const callaoSistema = Number(callaoItem.sistema || 0);
                     const callaoFisico = Number(callaoItem.fisico || 0);
                     const malvinasSistema = Number(malvinasItem?.sistema || 0);
                     const malvinasFisico = Number(malvinasItem?.fisico || 0);
-                    
+
                     const totalSistema = callaoSistema + malvinasSistema;
                     const totalFisico = callaoFisico + malvinasFisico;
                     const diferencia = totalFisico - totalSistema;
-                    
+
                     // Determinar resultado
                     let resultado: 'CONFORME' | 'SOBRANTE' | 'FALTANTE' = 'CONFORME';
                     if (totalFisico > totalSistema) {
@@ -122,7 +122,7 @@ export default function ConsolidadoPage() {
                     } else if (totalSistema > totalFisico) {
                         resultado = 'FALTANTE';
                     }
-                    
+
                     sortedGeneralData.push({
                         id: callaoItem.id || 0,
                         producto_item: callaoItem.producto_item || 0,
@@ -141,7 +141,7 @@ export default function ConsolidadoPage() {
                         malvinas_fisico: malvinasFisico
                     } as any);
                 });
-                
+
                 // Agregar productos que solo están en Malvinas
                 malvinasConsolidado.forEach((malvinasItem: ConsolidadoItem) => {
                     const codigo = String(malvinasItem.codigo || '').trim().toUpperCase();
@@ -150,11 +150,11 @@ export default function ConsolidadoPage() {
                     if (!yaExiste) {
                         const malvinasSistema = Number(malvinasItem.sistema || 0);
                         const malvinasFisico = Number(malvinasItem.fisico || 0);
-                        
+
                         const totalSistema = malvinasSistema;
                         const totalFisico = malvinasFisico;
                         const diferencia = totalFisico - totalSistema;
-                        
+
                         // Determinar resultado
                         let resultado: 'CONFORME' | 'SOBRANTE' | 'FALTANTE' = 'CONFORME';
                         if (totalFisico > totalSistema) {
@@ -162,7 +162,7 @@ export default function ConsolidadoPage() {
                         } else if (totalSistema > totalFisico) {
                             resultado = 'FALTANTE';
                         }
-                        
+
                         sortedGeneralData.push({
                             id: malvinasItem.id || 0,
                             producto_item: malvinasItem.producto_item || 0,
@@ -182,7 +182,7 @@ export default function ConsolidadoPage() {
                         } as any);
                     }
                 });
-                
+
                 // Actualizar todos los estados de una vez
                 setCallaoData(callaoConsolidado);
                 setMalvinasData(sortedMalvinasData);
@@ -190,7 +190,7 @@ export default function ConsolidadoPage() {
                 setResumenCallao(data.callao?.resumen || null);
                 setResumenMalvinas(data.malvinas?.resumen || null);
                 setResumenGeneral(data.general?.resumen || null);
-                
+
                 if (callaoConsolidado.length === 0 && malvinasConsolidado.length === 0 && sortedGeneralData.length === 0) {
                     setFetchError('No hay datos de consolidado. Asegúrate de haber cargado los archivos Excel de sistema para Callao y Malvinas.');
                 } else {
@@ -205,7 +205,7 @@ export default function ConsolidadoPage() {
         } catch (error: any) {
             console.error('Error fetching consolidados:', error);
             const errorMessage = error?.message || 'Error desconocido';
-            
+
             // Distinguir entre timeout y otros errores
             if (errorMessage.includes('tardando demasiado')) {
                 setFetchError('La carga está tardando más de lo esperado. Por favor, espere un momento y vuelva a intentar. El proceso puede tardar varios minutos con grandes volúmenes de datos.');
@@ -237,7 +237,7 @@ export default function ConsolidadoPage() {
         const handleProformaRegistrada = (event: Event) => {
             const customEvent = event as CustomEvent;
             const { almacen, inventario_id } = customEvent.detail || {};
-            
+
             // Solo recargar si es el mismo inventario
             if (inventoryId && inventario_id === inventoryId) {
                 // Resetear flag para forzar recarga
@@ -254,7 +254,7 @@ export default function ConsolidadoPage() {
         const handleCompararActualizado = (event: Event) => {
             const customEvent = event as CustomEvent;
             const { inventario_id } = customEvent.detail || {};
-            
+
             // Solo recargar si es el mismo inventario
             if (inventoryId && inventario_id === inventoryId) {
                 // Resetear flag para forzar recarga
@@ -268,7 +268,7 @@ export default function ConsolidadoPage() {
 
         window.addEventListener('proformaRegistrada', handleProformaRegistrada);
         window.addEventListener('compararActualizado', handleCompararActualizado);
-        
+
         return () => {
             window.removeEventListener('proformaRegistrada', handleProformaRegistrada);
             window.removeEventListener('compararActualizado', handleCompararActualizado);
@@ -312,7 +312,7 @@ export default function ConsolidadoPage() {
             // Obtener datos según el tipo
             let dataToExport: any[] = [];
             let sheetName = '';
-            
+
             if (tipo === 'general') {
                 dataToExport = generalData;
                 sheetName = 'Conteo General';
@@ -331,7 +331,7 @@ export default function ConsolidadoPage() {
 
             // Preparar datos para Excel
             let excelData: any[] = [];
-            
+
             if (tipo === 'general') {
                 excelData = dataToExport.map(item => ({
                     'ITEM': item.producto_item || '',
@@ -362,21 +362,21 @@ export default function ConsolidadoPage() {
             // Crear workbook
             const wb = XLSX.utils.book_new();
             const ws = XLSX.utils.json_to_sheet(excelData);
-            
+
             // Ajustar ancho de columnas
             const colWidths = Object.keys(excelData[0] || {}).map(key => ({
                 wch: Math.max(key.length, 15)
             }));
             ws['!cols'] = colWidths;
-            
+
             // Agregar hoja al workbook
             XLSX.utils.book_append_sheet(wb, ws, sheetName);
-            
+
             // Generar archivo Excel
             const numeroInventario = state.sesionActual.numero || 'INV';
             const filename = `consolidado_${tipo}_${numeroInventario}_${new Date().toISOString().split('T')[0]}.xlsx`;
             XLSX.writeFile(wb, filename);
-            
+
             showAlert('Éxito', `Archivo ${tipo} exportado con éxito`, 'success');
         } catch (error) {
             console.error('Error exporting excel:', error);
@@ -415,15 +415,15 @@ export default function ConsolidadoPage() {
             <div className="container mx-auto">
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 mb-6 transition-all">
                     <header className="flex justify-between items-center flex-wrap gap-4 mb-8">
-                        <div className="flex items-center space-x-4">
-                            <div className="w-14 h-14 bg-gradient-to-br from-[#002D5A] to-[#004a8d] rounded-2xl flex items-center justify-center text-white shadow-md transition-all duration-200">
-                                <BarChart3 className="w-7 h-7" />
+                        <div className="flex items-center space-x-3">
+                            <div className="w-12 h-12 bg-gradient-to-br from-[#002D5A] to-[#002D5A] rounded-xl flex items-center justify-center text-white shadow-sm transition-all duration-200">
+                                <BarChart3 className="w-6 h-6" />
                             </div>
                             <div>
-                                <h1 className="font-bold text-gray-900 m-0 leading-tight" style={{ fontSize: '24px' }}>
+                                <h1 className="font-bold text-gray-900 m-0" style={{ fontFamily: 'var(--font-poppins)', fontSize: '22px' }}>
                                     Consolidado de Inventarios
                                 </h1>
-                                <p className="text-sm text-gray-500 mt-1">
+                                <p className="text-sm text-gray-600 mt-1" style={{ fontFamily: 'var(--font-poppins)' }}>
                                     Resumen técnico y consolidado final por almacén y general
                                 </p>
                             </div>
@@ -494,12 +494,16 @@ export default function ConsolidadoPage() {
                                             </tr>
                                         ) : callaoData.length > 0 ? (
                                             callaoData.map((item, idx) => (
-                                                <tr key={item.id || idx} className="hover:bg-gray-50 transition-colors">
-                                                    <td className="px-2 py-3 text-center text-gray-500 font-medium text-[11px]">{item.producto_item}</td>
-                                                    <td className="px-2 py-3 text-left text-gray-700 font-semibold line-clamp-1 text-[11px]" title={item.producto}>{item.producto}</td>
-                                                    <td className="px-2 py-3 text-center text-gray-600 font-medium text-[11px]">{item.sistema}</td>
-                                                    <td className="px-2 py-3 text-center text-[#002D5A] font-bold text-[11px]">{item.fisico}</td>
-                                                    <td className={`px-2 py-3 text-center font-bold text-[11px] ${item.diferencia < 0 ? 'text-red-500' : item.diferencia > 0 ? 'text-blue-500' : 'text-gray-400'}`}>
+                                                <tr key={item.id || idx} className="hover:bg-gray-50 transition-colors h-[54px]">
+                                                    <td className="px-2 py-2 text-center text-gray-500 font-medium text-[11px] whitespace-nowrap">{item.producto_item}</td>
+                                                    <td className="px-2 py-2 text-left text-gray-700 font-semibold text-[11px]" title={item.producto}>
+                                                        <div className="line-clamp-2 leading-tight break-words whitespace-normal w-full min-w-[130px] pr-2">
+                                                            {item.producto}
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-2 py-2 text-center text-gray-600 font-medium text-[11px] whitespace-nowrap">{item.sistema}</td>
+                                                    <td className="px-2 py-2 text-center text-[#002D5A] font-bold text-[11px] whitespace-nowrap">{item.fisico}</td>
+                                                    <td className={`px-2 py-2 text-center font-bold text-[11px] whitespace-nowrap ${item.diferencia < 0 ? 'text-red-500' : item.diferencia > 0 ? 'text-blue-500' : 'text-gray-400'}`}>
                                                         {item.diferencia > 0 ? `+${item.diferencia}` : item.diferencia}
                                                     </td>
                                                 </tr>
@@ -543,11 +547,15 @@ export default function ConsolidadoPage() {
                                             </tr>
                                         ) : malvinasData.length > 0 ? (
                                             malvinasData.map((item, idx) => (
-                                                <tr key={item.id || idx} className="hover:bg-gray-50 transition-colors">
-                                                    <td className="px-2 py-3 text-left text-gray-700 font-semibold line-clamp-1 text-[11px]" title={item.producto}>{item.producto}</td>
-                                                    <td className="px-2 py-3 text-center text-gray-600 font-medium text-[11px]">{item.sistema}</td>
-                                                    <td className="px-2 py-3 text-center text-[#002D5A] font-bold text-[11px]">{item.fisico}</td>
-                                                    <td className={`px-2 py-3 text-center font-bold text-[11px] ${item.diferencia < 0 ? 'text-red-500' : item.diferencia > 0 ? 'text-blue-500' : 'text-gray-400'}`}>
+                                                <tr key={item.id || idx} className="hover:bg-gray-50 transition-colors h-[54px]">
+                                                    <td className="px-2 py-2 text-left text-gray-700 font-semibold text-[11px]" title={item.producto}>
+                                                        <div className="line-clamp-2 leading-tight break-words whitespace-normal w-full min-w-[150px] pr-2">
+                                                            {item.producto}
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-2 py-2 text-center text-gray-600 font-medium text-[11px] whitespace-nowrap">{item.sistema}</td>
+                                                    <td className="px-2 py-2 text-center text-[#002D5A] font-bold text-[11px] whitespace-nowrap">{item.fisico}</td>
+                                                    <td className={`px-2 py-2 text-center font-bold text-[11px] whitespace-nowrap ${item.diferencia < 0 ? 'text-red-500' : item.diferencia > 0 ? 'text-blue-500' : 'text-gray-400'}`}>
                                                         {item.diferencia > 0 ? `+${item.diferencia}` : item.diferencia}
                                                     </td>
                                                 </tr>
@@ -573,8 +581,8 @@ export default function ConsolidadoPage() {
                                 <table className="w-full text-sm border-collapse table-auto">
                                     <thead>
                                         <tr className="bg-gray-50 border-b border-gray-200">
-                                            <th className="px-2 py-3 text-center font-bold text-gray-600 text-[10px] uppercase w-24">Total Sistema</th>
-                                            <th className="px-2 py-3 text-center font-bold text-gray-600 text-[10px] uppercase w-24">Total Físico</th>
+                                            <th className="px-2 py-3 text-center font-bold text-gray-600 text-[10px] uppercase w-24">Tot. Sis.</th>
+                                            <th className="px-2 py-3 text-center font-bold text-gray-600 text-[10px] uppercase w-24">Tot Fís.</th>
                                             <th className="px-2 py-3 text-center font-bold text-gray-600 text-[10px] uppercase w-24">Diferencia</th>
                                             <th className="px-2 py-3 text-center font-bold text-gray-600 text-[10px] uppercase w-28">Resultado</th>
                                         </tr>
@@ -591,13 +599,13 @@ export default function ConsolidadoPage() {
                                             </tr>
                                         ) : generalData.length > 0 ? (
                                             generalData.map((item, idx) => (
-                                                <tr key={item.id || idx} className="hover:bg-gray-50 transition-colors">
-                                                    <td className="px-2 py-3 text-center text-gray-600 font-medium text-[11px]">{item.total_sistema || 0}</td>
-                                                    <td className="px-2 py-3 text-center text-[#002D5A] font-extrabold text-[11px]">{item.total_fisico || 0}</td>
-                                                    <td className={`px-2 py-3 text-center font-bold text-[11px] ${item.diferencia < 0 ? 'text-red-500' : item.diferencia > 0 ? 'text-blue-500' : 'text-gray-400'}`}>
+                                                <tr key={item.id || idx} className="hover:bg-gray-50 transition-colors h-[54px]">
+                                                    <td className="px-2 py-2 text-center text-gray-600 font-medium text-[11px] whitespace-nowrap">{item.total_sistema || 0}</td>
+                                                    <td className="px-2 py-2 text-center text-[#002D5A] font-extrabold text-[11px] whitespace-nowrap">{item.total_fisico || 0}</td>
+                                                    <td className={`px-2 py-2 text-center font-bold text-[11px] whitespace-nowrap ${item.diferencia < 0 ? 'text-red-500' : item.diferencia > 0 ? 'text-blue-500' : 'text-gray-400'}`}>
                                                         {item.diferencia > 0 ? `+${item.diferencia}` : item.diferencia}
                                                     </td>
-                                                    <td className="px-2 py-3 text-center">
+                                                    <td className="px-2 py-2 text-center whitespace-nowrap">
                                                         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold border ${getResultadoStyle(item.resultado)} shadow-sm`}>
                                                             {getResultadoIcon(item.resultado)}
                                                             {item.resultado || 'N/A'}

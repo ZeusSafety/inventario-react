@@ -76,6 +76,8 @@ export default function CompararPage() {
     const [filterText, setFilterText] = useState('');
     const [selectedAlmacen, setSelectedAlmacen] = useState<'callao' | 'malvinas' | null>(null);
     const [loading, setLoading] = useState(false);
+    const [loadingCallao, setLoadingCallao] = useState(false);
+    const [loadingMalvinas, setLoadingMalvinas] = useState(false);
 
     const [comparacionData, setComparacionData] = useState<ComparacionItem[]>([]);
     const [resumen, setResumen] = useState<Resumen | null>(null);
@@ -179,7 +181,7 @@ export default function CompararPage() {
         const handleProformaRegistrada = (event: Event) => {
             const customEvent = event as CustomEvent;
             const { almacen, inventario_id } = customEvent.detail || {};
-            
+
             // Solo recargar si es el mismo inventario y hay un almacén seleccionado
             if (selectedAlmacen && state.sesionActual?.inventario_id === inventario_id) {
                 // Pequeño delay para dar tiempo al backend de procesar
@@ -205,7 +207,7 @@ export default function CompararPage() {
                 setComparacionData(response.comparaciones || []);
                 if (response.resumen) setResumen(response.resumen);
                 setSistemaCargado(true);
-                
+
                 // Disparar evento para que Consolidado se actualice
                 window.dispatchEvent(new CustomEvent('compararActualizado', {
                     detail: {
@@ -277,7 +279,14 @@ export default function CompararPage() {
         formData.append('usuario', 'SISTEMA');
         formData.append('excel_file', file);
 
+        // Activar loading específico según el almacén
+        if (almacen === 'callao') {
+            setLoadingCallao(true);
+        } else {
+            setLoadingMalvinas(true);
+        }
         setLoading(true);
+
         try {
             console.log('📤 Subiendo archivo del sistema...');
             const uploadResp = await apiCallFormData(`cargar_sistema_${almacen}`, formData);
@@ -316,6 +325,12 @@ export default function CompararPage() {
             showAlert('Error', 'Error de conexión al subir archivo', 'error');
         } finally {
             setLoading(false);
+            // Desactivar loading específico según el almacén
+            if (almacen === 'callao') {
+                setLoadingCallao(false);
+            } else {
+                setLoadingMalvinas(false);
+            }
             if (e.target) e.target.value = '';
         }
     };
@@ -421,16 +436,16 @@ export default function CompararPage() {
         setIsSubmittingEdit(true);
 
         const action = activeModal === 'fisico' ? 'editar_cantidad_fisica' : 'editar_cantidad_sistema';
-        
+
         // Determinar el valor final de registrado_por y error_de
-        const registradoPorFinal = editForm.registrado_por === 'Otros' 
-            ? editForm.registrado_por_otro 
+        const registradoPorFinal = editForm.registrado_por === 'Otros'
+            ? editForm.registrado_por_otro
             : editForm.registrado_por;
-        
-        const errorDeFinal = editForm.error_de === 'Otros' 
-            ? editForm.error_de_otro 
+
+        const errorDeFinal = editForm.error_de === 'Otros'
+            ? editForm.error_de_otro
             : editForm.error_de;
-        
+
         const payload = {
             comparacion_id: selectedItem.id,
             inventario_id: state.sesionActual.inventario_id,
@@ -507,12 +522,12 @@ export default function CompararPage() {
         if (!selectedItem) return;
 
         const doc = new jsPDF();
-        
+
         // Título
         doc.setFontSize(16);
         doc.setFont('helvetica', 'bold');
         doc.text('Resultado de Verificación - Zeus Safety', 14, 20);
-        
+
         // Fecha de emisión
         doc.setFontSize(10);
         doc.setFont('helvetica', 'normal');
@@ -525,18 +540,18 @@ export default function CompararPage() {
             hour12: true
         });
         doc.text(`Emitido: ${fechaEmision}`, 14, 28);
-        
+
         let yPos = 38;
-        
+
         // SECCIÓN COMPRAS
         doc.setFontSize(12);
         doc.setFont('helvetica', 'bold');
         doc.text('COMPRAS', 14, yPos);
         yPos += 8;
-        
+
         doc.setFontSize(10);
         doc.setFont('helvetica', 'normal');
-        
+
         const comprasData = [
             ['Fecha ingreso', verificacionForm.fecha_ingreso_compra || '-'],
             ['Hora ingreso', verificacionForm.hora_ingreso_compra || '-'],
@@ -544,7 +559,7 @@ export default function CompararPage() {
             ['Fecha descarga inv.', verificacionForm.fecha_descarga_compra || '-'],
             ['Hora descarga inv.', verificacionForm.hora_descarga_compra || '-']
         ];
-        
+
         autoTable(doc, {
             startY: yPos,
             head: [['Campo', 'VALOR']],
@@ -554,25 +569,25 @@ export default function CompararPage() {
             styles: { fontSize: 9 },
             margin: { left: 14 }
         });
-        
+
         yPos = (doc as any).lastAutoTable.finalY + 10;
-        
+
         // SECCIÓN VENTAS
         doc.setFontSize(12);
         doc.setFont('helvetica', 'bold');
         doc.text('VENTAS', 14, yPos);
         yPos += 8;
-        
+
         doc.setFontSize(10);
         doc.setFont('helvetica', 'normal');
-        
+
         const ventasData = [
             ['Fecha desc. ventas', verificacionForm.fecha_descarga_ventas || '-'],
             ['Hora desc. ventas', verificacionForm.hora_descarga_ventas || '-'],
             ['Fecha desc. sistema', verificacionForm.fecha_descarga_sistema || '-'],
             ['Hora desc. sistema', verificacionForm.hora_descarga_sistema || '-']
         ];
-        
+
         autoTable(doc, {
             startY: yPos,
             head: [['Campo', 'VALOR']],
@@ -582,21 +597,21 @@ export default function CompararPage() {
             styles: { fontSize: 9 },
             margin: { left: 14 }
         });
-        
+
         yPos = (doc as any).lastAutoTable.finalY + 10;
-        
+
         // RESUMEN GENERAL
         doc.setFontSize(12);
         doc.setFont('helvetica', 'bold');
         doc.text('Resumen General', 14, yPos);
         yPos += 8;
-        
+
         const compras = Number(verificacionForm.compras_totales || 0);
         const ventas = Number(verificacionForm.ventas_totales || 0);
         const stockExistencia = compras - ventas;
         const stockFisico = Number(selectedItem?.cantidad_fisica || 0);
         const stockSistema = Number(selectedItem?.cantidad_sistema || 0);
-        
+
         const resumenData = [
             ['Compras Totales', compras.toString()],
             ['Ventas Totales', ventas.toString()],
@@ -604,7 +619,7 @@ export default function CompararPage() {
             ['Stock Físico', stockFisico.toString()],
             ['Stock Sistema', stockSistema.toString()]
         ];
-        
+
         autoTable(doc, {
             startY: yPos,
             head: [['Campo', 'VALOR']],
@@ -614,19 +629,19 @@ export default function CompararPage() {
             styles: { fontSize: 9 },
             margin: { left: 14 }
         });
-        
+
         yPos = (doc as any).lastAutoTable.finalY + 10;
-        
+
         // RESULTADO DE VERIFICACIÓN
         doc.setFontSize(12);
         doc.setFont('helvetica', 'bold');
         doc.text('Resultado de Verificación', 14, yPos);
         yPos += 8;
-        
+
         let resultado = '';
         const matchFisico = Math.abs(stockExistencia - stockFisico) < 0.01;
         const matchSistema = Math.abs(stockExistencia - stockSistema) < 0.01;
-        
+
         if (matchFisico && matchSistema) {
             resultado = 'CONFORME';
         } else if (matchFisico && !matchSistema) {
@@ -636,11 +651,11 @@ export default function CompararPage() {
         } else {
             resultado = 'REALIZAR NUEVO CONTEO';
         }
-        
+
         doc.setFontSize(10);
         doc.setFont('helvetica', 'bold');
         doc.text(resultado, 14, yPos);
-        
+
         // Información del producto
         yPos += 15;
         doc.setFontSize(9);
@@ -650,12 +665,12 @@ export default function CompararPage() {
         doc.text(`Código: ${selectedItem?.codigo || '-'}`, 14, yPos);
         yPos += 6;
         doc.text(`Responsable: ${verificacionForm.registrado_por || '-'}`, 14, yPos);
-        
+
         if (verificacionForm.observaciones) {
             yPos += 6;
             doc.text(`Observaciones: ${verificacionForm.observaciones}`, 14, yPos);
         }
-        
+
         doc.save(`Verificacion_${selectedItem?.codigo || 'reporte'}_${Date.now()}.pdf`);
     };
 
@@ -730,10 +745,20 @@ export default function CompararPage() {
 
                             <button
                                 onClick={() => fileInputRefCallao.current?.click()}
-                                className="flex items-center gap-2 px-4 py-1.5 bg-gradient-to-br from-[#E9F1FF] to-[#D9E6FF] hover:from-[#D9E6FF] hover:to-[#C9D6FF] text-[#0B3B8C] rounded-full btn-oval font-semibold hover:shadow-md transition-all text-[10px]"
+                                disabled={loadingCallao}
+                                className="flex items-center gap-2 px-4 py-1.5 bg-gradient-to-br from-[#E9F1FF] to-[#D9E6FF] hover:from-[#D9E6FF] hover:to-[#C9D6FF] text-[#0B3B8C] rounded-full btn-oval font-semibold hover:shadow-md transition-all text-[10px] disabled:opacity-70 disabled:cursor-not-allowed"
                             >
-                                <Upload className="w-3.5 h-3.5" />
-                                <span>Sistema Callao</span>
+                                {loadingCallao ? (
+                                    <>
+                                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                        <span>Cargando...</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Upload className="w-3.5 h-3.5" />
+                                        <span>Sistema Callao</span>
+                                    </>
+                                )}
                             </button>
                             <button
                                 className={`flex items-center gap-2 px-4 py-1.5 rounded-full btn-oval font-semibold hover:shadow-md transition-all text-[10px] ${selectedAlmacen === 'callao' ? 'bg-[#0B3B8C] text-white' : 'bg-white border-2 border-[#0B3B8C] text-[#0B3B8C]'}`}
@@ -744,10 +769,20 @@ export default function CompararPage() {
                             </button>
                             <button
                                 onClick={() => fileInputRefMalvinas.current?.click()}
-                                className="flex items-center gap-2 px-4 py-1.5 bg-gradient-to-br from-[#E9F1FF] to-[#D9E6FF] hover:from-[#D9E6FF] hover:to-[#C9D6FF] text-[#0B3B8C] rounded-full btn-oval font-semibold hover:shadow-md transition-all text-[10px]"
+                                disabled={loadingMalvinas}
+                                className="flex items-center gap-2 px-4 py-1.5 bg-gradient-to-br from-[#E9F1FF] to-[#D9E6FF] hover:from-[#D9E6FF] hover:to-[#C9D6FF] text-[#0B3B8C] rounded-full btn-oval font-semibold hover:shadow-md transition-all text-[10px] disabled:opacity-70 disabled:cursor-not-allowed"
                             >
-                                <Upload className="w-3.5 h-3.5" />
-                                <span>Sistema Malvinas</span>
+                                {loadingMalvinas ? (
+                                    <>
+                                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                        <span>Cargando...</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Upload className="w-3.5 h-3.5" />
+                                        <span>Sistema Malvinas</span>
+                                    </>
+                                )}
                             </button>
                             <button
                                 className={`flex items-center gap-2 px-4 py-1.5 rounded-full btn-oval font-semibold hover:shadow-md transition-all text-[10px] ${selectedAlmacen === 'malvinas' ? 'bg-[#0B3B8C] text-white' : 'bg-white border-2 border-[#0B3B8C] text-[#0B3B8C]'}`}
@@ -1455,10 +1490,10 @@ export default function CompararPage() {
             {
                 activeModal && (
                     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
-                        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto animate-in zoom-in-95 duration-200">
+                        <div className={`bg-white rounded-2xl shadow-2xl w-full ${activeModal === 'verificacion' ? 'max-w-4xl' : 'max-w-2xl'} max-h-[90vh] overflow-y-auto animate-in zoom-in-95 duration-200`}>
                             {/* Modal Header */}
                             <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-white sticky top-0 z-20">
-                                <h3 className="text-[17px] font-black text-gray-800 flex items-center gap-2">
+                                <h3 className="text-[17px] font-bold text-gray-800 flex items-center gap-2">
                                     <ClipboardCheck className="w-6 h-6 text-blue-600" />
                                     <span className="uppercase tracking-tight">{activeModal === 'verificacion' ? 'Editar Verificación' : 'Editar Cantidades'}</span>
                                 </h3>
@@ -1467,16 +1502,16 @@ export default function CompararPage() {
                                 </button>
                             </div>
 
-                            <div className="p-4 space-y-4">
+                            <div className="p-5 md:p-6 space-y-5">
                                 {/* Product Info (Readonly) */}
                                 <div className="grid grid-cols-2 gap-4 bg-[#F8FAFF] p-3 rounded-xl border-2 border-[#E9F1FF]">
                                     <div>
-                                        <label className="text-[10px] font-black text-[#0B3B8C] uppercase tracking-wider mb-0.5 block">Producto en Evaluación</label>
-                                        <p className="font-black text-gray-900 text-[15px] leading-tight">{selectedItem?.producto}</p>
+                                        <label className="text-[10px] font-semibold text-[#0B3B8C] uppercase tracking-wider mb-0.5 block">Producto en Evaluación</label>
+                                        <p className="font-semibold text-gray-900 text-[15px] leading-tight">{selectedItem?.producto}</p>
                                     </div>
                                     <div className="text-right">
-                                        <label className="text-[10px] font-black text-[#0B3B8C] uppercase tracking-wider mb-0.5 block">Código de Serie</label>
-                                        <p className="font-mono font-black text-blue-700 text-[15px]">{selectedItem?.codigo}</p>
+                                        <label className="text-[10px] font-semibold text-[#0B3B8C] uppercase tracking-wider mb-0.5 block">Código de Serie</label>
+                                        <p className="font-mono font-semibold text-blue-700 text-[15px]">{selectedItem?.codigo}</p>
                                     </div>
                                 </div>
 
@@ -1485,10 +1520,10 @@ export default function CompararPage() {
                                     <div className="space-y-6 animate-in slide-in-from-bottom-2 duration-300">
                                         <div className="grid grid-cols-2 gap-4">
                                             <div className="relative">
-                                                <label className="absolute -top-2.5 left-3 px-1.5 bg-white text-[10px] font-black text-gray-400 uppercase tracking-wider">Cantidad Nueva</label>
+                                                <label className="absolute -top-2.5 left-3 px-1.5 bg-white text-[10px] font-bold text-gray-400 uppercase tracking-wider">Cantidad Nueva</label>
                                                 <input
                                                     type="number"
-                                                    className="w-full p-2.5 border-2 border-gray-100 rounded-xl focus:border-blue-500 outline-none font-black text-gray-700 text-sm transition-all"
+                                                    className="w-full p-2.5 border-2 border-gray-100 rounded-xl focus:border-blue-500 outline-none font-medium text-gray-700 text-sm transition-all"
                                                     value={editForm.cantidad}
                                                     onChange={(e) => {
                                                         const value = e.target.value;
@@ -1497,10 +1532,10 @@ export default function CompararPage() {
                                                 />
                                             </div>
                                             <div className="relative">
-                                                <label className="absolute -top-2.5 left-3 px-1.5 bg-white text-[10px] font-black text-gray-400 uppercase tracking-wider">Motivo de Ajuste</label>
+                                                <label className="absolute -top-2.5 left-3 px-1.5 bg-white text-[10px] font-bold text-gray-400 uppercase tracking-wider">Motivo de Ajuste</label>
                                                 {activeModal === 'fisico' ? (
                                                     <select
-                                                        className="w-full p-2.5 border-2 border-gray-100 rounded-xl bg-white font-black text-gray-700 outline-none focus:border-blue-500 appearance-none transition-all text-sm"
+                                                        className="w-full p-2.5 border-2 border-gray-100 rounded-xl bg-white font-medium text-gray-700 outline-none focus:border-blue-500 appearance-none transition-all text-sm"
                                                         value={editForm.motivo_tipo}
                                                         onChange={(e) => setEditForm({ ...editForm, motivo_tipo: e.target.value, motivo: e.target.value !== 'otro' ? e.target.value : '' })}
                                                     >
@@ -1510,7 +1545,7 @@ export default function CompararPage() {
                                                     </select>
                                                 ) : (
                                                     <select
-                                                        className="w-full p-2.5 border-2 border-gray-100 rounded-xl bg-white font-black text-gray-700 outline-none focus:border-blue-500 appearance-none transition-all text-sm"
+                                                        className="w-full p-2.5 border-2 border-gray-100 rounded-xl bg-white font-medium text-gray-700 outline-none focus:border-blue-500 appearance-none transition-all text-sm"
                                                         value={editForm.motivo_tipo}
                                                         onChange={(e) => setEditForm({ ...editForm, motivo_tipo: e.target.value, motivo: e.target.value !== 'otro' ? e.target.value : '' })}
                                                     >
@@ -1525,10 +1560,10 @@ export default function CompararPage() {
 
                                         {editForm.motivo_tipo === 'otro' && (
                                             <div className="relative animate-in slide-in-from-top-2 duration-200">
-                                                <label className="absolute -top-2.5 left-3 px-1.5 bg-white text-[10px] font-black text-gray-400 uppercase tracking-wider">Especifique Motivo</label>
+                                                <label className="absolute -top-2.5 left-3 px-1.5 bg-white text-[10px] font-bold text-gray-400 uppercase tracking-wider">Especifique Motivo</label>
                                                 <input
                                                     type="text"
-                                                    className="w-full p-2.5 border-2 border-gray-100 rounded-xl focus:border-blue-500 outline-none font-black text-gray-700 transition-all border-dashed text-sm"
+                                                    className="w-full p-2.5 border-2 border-gray-100 rounded-xl focus:border-blue-500 outline-none font-medium text-gray-700 transition-all border-dashed text-sm"
                                                     value={editForm.motivo}
                                                     onChange={(e) => setEditForm({ ...editForm, motivo: e.target.value })}
                                                 />
@@ -1537,9 +1572,9 @@ export default function CompararPage() {
 
                                         <div className="grid grid-cols-2 gap-4">
                                             <div className="relative">
-                                                <label className="absolute -top-2.5 left-3 px-1.5 bg-white text-[10px] font-black text-gray-400 uppercase tracking-wider">Registrado por</label>
+                                                <label className="absolute -top-2.5 left-3 px-1.5 bg-white text-[10px] font-bold text-gray-400 uppercase tracking-wider">Registrado por</label>
                                                 <select
-                                                    className="w-full p-2.5 border-2 border-gray-100 rounded-xl bg-white font-black text-gray-700 outline-none focus:border-blue-500 appearance-none transition-all text-sm"
+                                                    className="w-full p-2.5 border-2 border-gray-100 rounded-xl bg-white font-medium text-gray-700 outline-none focus:border-blue-500 appearance-none transition-all text-sm"
                                                     value={editForm.registrado_por}
                                                     onChange={(e) => setEditForm({ ...editForm, registrado_por: e.target.value, registrado_por_otro: e.target.value === 'Otros' ? editForm.registrado_por_otro : '' })}
                                                 >
@@ -1552,9 +1587,9 @@ export default function CompararPage() {
                                                 </select>
                                             </div>
                                             <div className="relative">
-                                                <label className="absolute -top-2.5 left-3 px-1.5 bg-white text-[10px] font-black text-gray-400 uppercase tracking-wider">Error de</label>
+                                                <label className="absolute -top-2.5 left-3 px-1.5 bg-white text-[10px] font-bold text-gray-400 uppercase tracking-wider">Error de</label>
                                                 <select
-                                                    className="w-full p-2.5 border-2 border-gray-100 rounded-xl bg-white font-black text-gray-700 outline-none focus:border-blue-500 appearance-none transition-all text-sm"
+                                                    className="w-full p-2.5 border-2 border-gray-100 rounded-xl bg-white font-medium text-gray-700 outline-none focus:border-blue-500 appearance-none transition-all text-sm"
                                                     value={editForm.error_de}
                                                     onChange={(e) => setEditForm({ ...editForm, error_de: e.target.value, error_de_otro: e.target.value === 'Otros' ? editForm.error_de_otro : '' })}
                                                 >
@@ -1567,28 +1602,28 @@ export default function CompararPage() {
                                                 </select>
                                             </div>
                                         </div>
-                                        
+
                                         {/* Input condicional para Registrado por - Otros */}
                                         {editForm.registrado_por === 'Otros' && (
                                             <div className="relative animate-in slide-in-from-top-2 duration-200">
-                                                <label className="absolute -top-2.5 left-3 px-1.5 bg-white text-[10px] font-black text-gray-400 uppercase tracking-wider">Especifique Registrado por</label>
+                                                <label className="absolute -top-2.5 left-3 px-1.5 bg-white text-[10px] font-bold text-gray-400 uppercase tracking-wider">Especifique Registrado por</label>
                                                 <input
                                                     type="text"
-                                                    className="w-full p-2.5 border-2 border-gray-100 rounded-xl focus:border-blue-500 outline-none font-black text-gray-700 transition-all border-dashed text-sm"
+                                                    className="w-full p-2.5 border-2 border-gray-100 rounded-xl focus:border-blue-500 outline-none font-medium text-gray-700 transition-all border-dashed text-sm"
                                                     value={editForm.registrado_por_otro}
                                                     onChange={(e) => setEditForm({ ...editForm, registrado_por_otro: e.target.value })}
                                                     placeholder="Ingrese el nombre..."
                                                 />
                                             </div>
                                         )}
-                                        
+
                                         {/* Input condicional para Error de - Otros */}
                                         {editForm.error_de === 'Otros' && (
                                             <div className="relative animate-in slide-in-from-top-2 duration-200">
-                                                <label className="absolute -top-2.5 left-3 px-1.5 bg-white text-[10px] font-black text-gray-400 uppercase tracking-wider">Especifique Error de</label>
+                                                <label className="absolute -top-2.5 left-3 px-1.5 bg-white text-[10px] font-bold text-gray-400 uppercase tracking-wider">Especifique Error de</label>
                                                 <input
                                                     type="text"
-                                                    className="w-full p-2.5 border-2 border-gray-100 rounded-xl focus:border-blue-500 outline-none font-black text-gray-700 transition-all border-dashed text-sm"
+                                                    className="w-full p-2.5 border-2 border-gray-100 rounded-xl focus:border-blue-500 outline-none font-medium text-gray-700 transition-all border-dashed text-sm"
                                                     value={editForm.error_de_otro}
                                                     onChange={(e) => setEditForm({ ...editForm, error_de_otro: e.target.value })}
                                                     placeholder="Ingrese el nombre..."
@@ -1596,7 +1631,7 @@ export default function CompararPage() {
                                             </div>
                                         )}
                                         <div className="relative">
-                                            <label className="absolute -top-2.5 left-3 px-1.5 bg-white text-[10px] font-black text-gray-400 uppercase tracking-wider">Notas y Observaciones</label>
+                                            <label className="absolute -top-2.5 left-3 px-1.5 bg-white text-[10px] font-bold text-gray-400 uppercase tracking-wider">Notas y Observaciones</label>
                                             <textarea
                                                 className="w-full p-3 border-2 border-gray-100 rounded-xl h-24 font-medium text-gray-600 outline-none focus:border-blue-500 transition-all resize-none text-sm"
                                                 value={editForm.observaciones}
@@ -1610,74 +1645,70 @@ export default function CompararPage() {
                                 {activeModal === 'verificacion' && (
                                     <div className="space-y-6 animate-in fade-in duration-500">
                                         {/* SECTION 1: COMPRAS Y VENTAS */}
-                                        <div className="bg-white border-2 border-gray-100 rounded-[18px] overflow-hidden shadow-sm transition-all hover:shadow-md">
-                                            <div className="bg-[#0061F2] p-2 px-4 font-black text-white text-[11px] uppercase flex items-center gap-2">
-                                                <div className="w-6 h-2 bg-white/30 rounded-full"></div>
-                                                COMPRAS Y VENTAS
-                                            </div>
-                                            <div className="p-4">
-                                                <div className="grid grid-cols-2 gap-6">
-                                                    {/* COLUMNA COMPRAS */}
-                                                    <div className="space-y-3">
-                                                        <div className="relative group">
-                                                            <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#0061F2] transition-all">Fecha ingreso inventario</label>
-                                                            <input type="date" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#0061F2] h-[40px] transition-all bg-white"
-                                                                value={verificacionForm.fecha_ingreso_compra}
-                                                                onChange={(e) => setVerificacionForm({ ...verificacionForm, fecha_ingreso_compra: e.target.value })} />
-                                                        </div>
-                                                        <div className="relative group">
-                                                            <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#0061F2] transition-all">Hora ingreso</label>
-                                                            <input type="time" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#0061F2] h-[40px] transition-all bg-white"
-                                                                value={verificacionForm.hora_ingreso_compra}
-                                                                onChange={(e) => setVerificacionForm({ ...verificacionForm, hora_ingreso_compra: e.target.value })} />
-                                                        </div>
-                                                        <div className="relative group">
-                                                            <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#0061F2] transition-all">Número de acta</label>
-                                                            <input type="text" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#0061F2] h-[40px] transition-all bg-white"
-                                                                value={verificacionForm.numero_acta}
-                                                                onChange={(e) => setVerificacionForm({ ...verificacionForm, numero_acta: e.target.value })} />
-                                                        </div>
-                                                        <div className="relative group">
-                                                            <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#0061F2] transition-all">Fecha descarga inventario</label>
-                                                            <input type="date" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#0061F2] h-[40px] transition-all bg-white"
-                                                                value={verificacionForm.fecha_descarga_compra}
-                                                                onChange={(e) => setVerificacionForm({ ...verificacionForm, fecha_descarga_compra: e.target.value })} />
-                                                        </div>
-                                                        <div className="relative group">
-                                                            <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#0061F2] transition-all">Hora descarga inventario</label>
-                                                            <input type="time" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#0061F2] h-[40px] transition-all bg-white"
-                                                                value={verificacionForm.hora_descarga_compra}
-                                                                onChange={(e) => setVerificacionForm({ ...verificacionForm, hora_descarga_compra: e.target.value })} />
-                                                        </div>
-                                                    </div>
-                                                    
-                                                    {/* COLUMNA VENTAS */}
-                                                    <div className="space-y-3">
-                                                        <div className="relative group">
-                                                            <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#6610f2] transition-all">Fecha descarga ventas</label>
-                                                            <input type="date" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#6610f2] h-[40px] transition-all bg-white"
-                                                                value={verificacionForm.fecha_descarga_ventas}
-                                                                onChange={(e) => setVerificacionForm({ ...verificacionForm, fecha_descarga_ventas: e.target.value })} />
-                                                        </div>
-                                                        <div className="relative group">
-                                                            <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#6610f2] transition-all">Hora descarga ventas</label>
-                                                            <input type="time" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#6610f2] h-[40px] transition-all bg-white"
-                                                                value={verificacionForm.hora_descarga_ventas}
-                                                                onChange={(e) => setVerificacionForm({ ...verificacionForm, hora_descarga_ventas: e.target.value })} />
-                                                        </div>
-                                                        <div className="relative group">
-                                                            <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#6610f2] transition-all">Fecha descarga sistema</label>
-                                                            <input type="date" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#6610f2] h-[40px] transition-all bg-white"
-                                                                value={verificacionForm.fecha_descarga_sistema}
-                                                                onChange={(e) => setVerificacionForm({ ...verificacionForm, fecha_descarga_sistema: e.target.value })} />
-                                                        </div>
-                                                        <div className="relative group">
-                                                            <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#6610f2] transition-all">Hora descarga sistema</label>
-                                                            <input type="time" className="w-full p-2.5 border-2 border-gray-100 rounded-xl text-[12px] font-black text-gray-700 outline-none focus:border-[#6610f2] h-[40px] transition-all bg-white"
-                                                                value={verificacionForm.hora_descarga_sistema}
-                                                                onChange={(e) => setVerificacionForm({ ...verificacionForm, hora_descarga_sistema: e.target.value })} />
-                                                        </div>
-                                                    </div>
+                                        <div className="px-1 mb-8 mt-2">
+                                            <div className="grid grid-cols-4 gap-x-4 gap-y-5">
+                                                {/* Headers Compras & Ventas */}
+                                                <div className="col-span-2 text-[13px] font-bold text-[#0061F2] px-1 relative pb-1 mb-1">Compras</div>
+                                                <div className="col-span-2 text-[13px] font-bold text-[#0061F2] px-1 relative pb-1 mb-1">Ventas</div>
+
+                                                {/* ROW 1 */}
+                                                <div className="flex flex-col gap-1 col-span-1">
+                                                    <label className="text-[9px] font-bold text-gray-500 uppercase tracking-widest leading-tight h-7 flex items-end">Fecha Ingreso<br />Inventario</label>
+                                                    <input type="date" className="w-full p-2 border-2 border-gray-100 rounded-xl text-[11px] font-medium text-gray-700 outline-none focus:border-[#0061F2] h-[36px] transition-all bg-white"
+                                                        value={verificacionForm.fecha_ingreso_compra}
+                                                        onChange={(e) => setVerificacionForm({ ...verificacionForm, fecha_ingreso_compra: e.target.value })} />
+                                                </div>
+                                                <div className="flex flex-col gap-1 col-span-1">
+                                                    <label className="text-[9px] font-bold text-gray-500 uppercase tracking-widest leading-tight h-7 flex items-end">Hora Ingreso</label>
+                                                    <input type="time" className="w-full p-2 border-2 border-gray-100 rounded-xl text-[11px] font-medium text-gray-700 outline-none focus:border-[#0061F2] h-[36px] transition-all bg-white"
+                                                        value={verificacionForm.hora_ingreso_compra}
+                                                        onChange={(e) => setVerificacionForm({ ...verificacionForm, hora_ingreso_compra: e.target.value })} />
+                                                </div>
+                                                <div className="flex flex-col gap-1 col-span-1">
+                                                    <label className="text-[9px] font-bold text-gray-500 uppercase tracking-widest leading-tight h-7 flex items-end">Fecha Descarga<br />Ventas</label>
+                                                    <input type="date" className="w-full p-2 border-2 border-gray-100 rounded-xl text-[11px] font-medium text-gray-700 outline-none focus:border-[#6610f2] h-[36px] transition-all bg-white"
+                                                        value={verificacionForm.fecha_descarga_ventas}
+                                                        onChange={(e) => setVerificacionForm({ ...verificacionForm, fecha_descarga_ventas: e.target.value })} />
+                                                </div>
+                                                <div className="flex flex-col gap-1 col-span-1">
+                                                    <label className="text-[9px] font-bold text-gray-500 uppercase tracking-widest leading-tight h-7 flex items-end">Hora Descarga<br />Ventas</label>
+                                                    <input type="time" className="w-full p-2 border-2 border-gray-100 rounded-xl text-[11px] font-medium text-gray-700 outline-none focus:border-[#6610f2] h-[36px] transition-all bg-white"
+                                                        value={verificacionForm.hora_descarga_ventas}
+                                                        onChange={(e) => setVerificacionForm({ ...verificacionForm, hora_descarga_ventas: e.target.value })} />
+                                                </div>
+
+                                                {/* ROW 2 */}
+                                                <div className="flex flex-col gap-1 col-span-2">
+                                                    <label className="text-[9px] font-bold text-gray-500 uppercase tracking-widest leading-tight h-7 flex items-end">Número de Acta</label>
+                                                    <input type="text" className="w-full p-2 border-2 border-gray-100 rounded-xl text-[11px] font-medium text-gray-700 outline-none focus:border-[#0061F2] h-[36px] transition-all bg-white"
+                                                        value={verificacionForm.numero_acta}
+                                                        onChange={(e) => setVerificacionForm({ ...verificacionForm, numero_acta: e.target.value })} />
+                                                </div>
+                                                <div className="flex flex-col gap-1 col-span-1">
+                                                    <label className="text-[9px] font-bold text-gray-500 uppercase tracking-widest leading-tight h-7 flex items-end">Fecha Descarga<br />Sistema</label>
+                                                    <input type="date" className="w-full p-2 border-2 border-gray-100 rounded-xl text-[11px] font-medium text-gray-700 outline-none focus:border-[#0061F2] h-[36px] transition-all bg-white"
+                                                        value={verificacionForm.fecha_descarga_sistema}
+                                                        onChange={(e) => setVerificacionForm({ ...verificacionForm, fecha_descarga_sistema: e.target.value })} />
+                                                </div>
+                                                <div className="flex flex-col gap-1 col-span-1">
+                                                    <label className="text-[9px] font-bold text-gray-500 uppercase tracking-widest leading-tight h-7 flex items-end">Hora Descarga<br />Sistema</label>
+                                                    <input type="time" className="w-full p-2 border-2 border-gray-100 rounded-xl text-[11px] font-medium text-gray-700 outline-none focus:border-[#0061F2] h-[36px] transition-all bg-white"
+                                                        value={verificacionForm.hora_descarga_sistema}
+                                                        onChange={(e) => setVerificacionForm({ ...verificacionForm, hora_descarga_sistema: e.target.value })} />
+                                                </div>
+
+                                                {/* ROW 3 */}
+                                                <div className="flex flex-col gap-1 col-span-1">
+                                                    <label className="text-[9px] font-bold text-gray-500 uppercase tracking-widest leading-tight h-7 flex items-end">Fecha Descarga<br />Inventario</label>
+                                                    <input type="date" className="w-full p-2 border-2 border-gray-100 rounded-xl text-[11px] font-medium text-gray-700 outline-none focus:border-[#0061F2] h-[36px] transition-all bg-white"
+                                                        value={verificacionForm.fecha_descarga_compra}
+                                                        onChange={(e) => setVerificacionForm({ ...verificacionForm, fecha_descarga_compra: e.target.value })} />
+                                                </div>
+                                                <div className="flex flex-col gap-1 col-span-1">
+                                                    <label className="text-[9px] font-bold text-gray-500 uppercase tracking-widest leading-tight h-7 flex items-end">Hora Descarga<br />Inventario</label>
+                                                    <input type="time" className="w-full p-2 border-2 border-gray-100 rounded-xl text-[11px] font-medium text-gray-700 outline-none focus:border-[#0061F2] h-[36px] transition-all bg-white"
+                                                        value={verificacionForm.hora_descarga_compra}
+                                                        onChange={(e) => setVerificacionForm({ ...verificacionForm, hora_descarga_compra: e.target.value })} />
                                                 </div>
                                             </div>
                                         </div>
@@ -1690,30 +1721,30 @@ export default function CompararPage() {
                                             </div>
                                             <div className="p-4 grid grid-cols-3 gap-4">
                                                 <div className="relative group">
-                                                    <label className="absolute -top-2.5 left-4 px-2 bg-white text-[10px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#FFC107] transition-all">Compras Totales</label>
+                                                    <label className="absolute -top-2 left-4 px-2 bg-white text-[9px] font-bold text-gray-400 uppercase tracking-widest group-focus-within:text-[#FFC107] transition-all shadow-sm rounded-full z-10">Compras Totales</label>
                                                     <input
                                                         type="number"
-                                                        className="w-full p-2 border-2 border-gray-100 rounded-lg text-[13px] font-black text-gray-700 focus:border-[#FFC107] outline-none transition-all h-[40px] bg-white text-center"
+                                                        className="w-full p-2 border-2 border-gray-100 rounded-xl text-[16px] font-bold text-gray-800 focus:border-[#FFC107] outline-none transition-all h-[52px] bg-white text-center"
                                                         value={verificacionForm.compras_totales || ''}
                                                         onChange={(e) => setVerificacionForm({ ...verificacionForm, compras_totales: Number(e.target.value) })}
                                                         placeholder="0"
                                                     />
                                                 </div>
                                                 <div className="relative group">
-                                                    <label className="absolute -top-2 left-4 px-2 bg-white text-[9px] font-black text-gray-400 uppercase tracking-widest group-focus-within:text-[#FFC107] transition-all">Ventas Totales</label>
+                                                    <label className="absolute -top-2 left-4 px-2 bg-white text-[9px] font-bold text-gray-400 uppercase tracking-widest group-focus-within:text-[#FFC107] transition-all shadow-sm rounded-full z-10">Ventas Totales</label>
                                                     <input
                                                         type="number"
-                                                        className="w-full p-2 border-2 border-gray-100 rounded-lg text-[13px] font-black text-gray-700 focus:border-[#FFC107] outline-none transition-all h-[40px] bg-white text-center"
+                                                        className="w-full p-2 border-2 border-gray-100 rounded-xl text-[16px] font-bold text-gray-800 focus:border-[#FFC107] outline-none transition-all h-[52px] bg-white text-center"
                                                         value={verificacionForm.ventas_totales || ''}
                                                         onChange={(e) => setVerificacionForm({ ...verificacionForm, ventas_totales: Number(e.target.value) })}
                                                         placeholder="0"
                                                     />
                                                 </div>
-                                                <div className="bg-[#FEFCE8] border-2 border-amber-100/50 p-2.5 rounded-xl relative flex flex-col justify-center items-start shadow-sm min-h-[48px]">
-                                                    <label className="text-[9px] text-amber-800 font-bold uppercase absolute top-1.5 left-3 tracking-widest opacity-40">Stock de Existencias</label>
-                                                    <span className="text-[20px] font-black text-amber-900 mt-3 ml-1 leading-none">
+                                                <div className="relative group">
+                                                    <label className="absolute -top-2 left-4 px-2 bg-[#FEFCE8] text-[9px] font-bold text-amber-800 uppercase tracking-widest transition-all shadow-sm rounded-full z-10">Stock de Existencias</label>
+                                                    <div className="w-full flex items-center p-2 border-2 border-amber-200/60 bg-[#FEFCE8] rounded-xl text-[16px] font-bold text-amber-900 h-[52px] px-3 shadow-inner">
                                                         {(verificacionForm.compras_totales || 0) - (verificacionForm.ventas_totales || 0)}
-                                                    </span>
+                                                    </div>
                                                 </div>
                                             </div>
                                         </div>
@@ -1739,6 +1770,11 @@ export default function CompararPage() {
                                                     let cardFisicoClass = 'bg-white text-gray-900';
                                                     let cardSistemaClass = 'bg-white text-gray-900';
 
+                                                    let labelFisicoClass = 'text-gray-400';
+                                                    let labelSistemaClass = 'text-gray-400';
+                                                    let bgLabelFisico = 'bg-[#F0FDF4]';
+                                                    let bgLabelSistema = 'bg-[#F0FDF4]';
+
                                                     const matchFisico = Math.abs(stockExistencia - stockFisico) < 0.01;
                                                     const matchSistema = Math.abs(stockExistencia - stockSistema) < 0.01;
 
@@ -1747,49 +1783,57 @@ export default function CompararPage() {
                                                         colorClass = 'bg-[#198754] border-[#13653f] shadow-emerald-100 text-white';
                                                         cardFisicoClass = 'bg-[#F0FDF4] border-emerald-200 text-emerald-900';
                                                         cardSistemaClass = 'bg-[#F0FDF4] border-emerald-200 text-emerald-900';
+                                                        labelFisicoClass = 'text-emerald-700'; labelSistemaClass = 'text-emerald-700';
+                                                        bgLabelFisico = 'bg-[#F0FDF4]'; bgLabelSistema = 'bg-[#F0FDF4]';
                                                     } else if (matchFisico && !matchSistema) {
                                                         estado = 'ERROR DE SISTEMA';
                                                         colorClass = 'bg-[#FFC107] border-[#d39e00] shadow-amber-100 text-gray-900';
-                                                        cardFisicoClass = 'bg-[#F0FDF4] border-emerald-200 text-emerald-900 font-black';
+                                                        cardFisicoClass = 'bg-[#F0FDF4] border-emerald-200 text-emerald-900';
                                                         cardSistemaClass = 'bg-red-50 border-red-200 text-red-900 animate-pulse';
+                                                        labelFisicoClass = 'text-emerald-700'; labelSistemaClass = 'text-red-700';
+                                                        bgLabelFisico = 'bg-[#F0FDF4]'; bgLabelSistema = 'bg-red-50';
                                                     } else if (matchSistema && !matchFisico) {
                                                         estado = 'ERROR DE LOGÍSTICA';
                                                         colorClass = 'bg-[#DC3545] border-[#a71d2a] shadow-red-100 text-white';
-                                                        cardSistemaClass = 'bg-[#F0FDF4] border-emerald-200 text-emerald-900 font-black';
+                                                        cardSistemaClass = 'bg-[#F0FDF4] border-emerald-200 text-emerald-900';
                                                         cardFisicoClass = 'bg-red-50 border-red-200 text-red-900 animate-pulse';
+                                                        labelFisicoClass = 'text-red-700'; labelSistemaClass = 'text-emerald-700';
+                                                        bgLabelFisico = 'bg-red-50'; bgLabelSistema = 'bg-[#F0FDF4]';
                                                     } else {
                                                         estado = 'REALIZAR NUEVO CONTEO';
                                                         colorClass = 'bg-[#007BFF] border-[#0056b3] shadow-blue-100 text-white';
                                                         cardFisicoClass = 'bg-orange-50 border-orange-200 text-orange-900';
                                                         cardSistemaClass = 'bg-orange-50 border-orange-200 text-orange-900';
+                                                        labelFisicoClass = 'text-orange-900'; labelSistemaClass = 'text-orange-900';
+                                                        bgLabelFisico = 'bg-orange-50'; bgLabelSistema = 'bg-orange-50';
                                                     }
 
                                                     return (
                                                         <>
-                                                            <div className={`${cardFisicoClass} border-2 p-2.5 rounded-xl relative flex flex-col justify-center items-start shadow-sm min-h-[60px] transition-all`}>
-                                                                <label className={`text-[9px] uppercase absolute top-1.5 left-3 tracking-widest font-black opacity-40`}>Stock Físico</label>
-                                                                <span className="text-[20px] font-black mt-3 ml-1 leading-none">
+                                                            <div className="relative group">
+                                                                <label className={`absolute -top-2 left-4 px-2 ${bgLabelFisico} text-[9px] font-bold ${labelFisicoClass} uppercase tracking-widest transition-all shadow-sm rounded-full z-10`}>Stock Físico</label>
+                                                                <div className={`w-full flex items-center p-2 border-2 rounded-xl text-[16px] font-bold h-[52px] px-3 shadow-inner ${cardFisicoClass} relative`}>
                                                                     {stockFisico.toLocaleString()}
-                                                                </span>
-                                                                {(estado === 'ERROR DE LOGÍSTICA' || estado === 'REALIZAR NUEVO CONTEO') && (
-                                                                    <div className="absolute top-2 right-4">
-                                                                        <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping"></div>
-                                                                    </div>
-                                                                )}
+                                                                    {(estado === 'ERROR DE LOGÍSTICA' || estado === 'REALIZAR NUEVO CONTEO') && (
+                                                                        <div className="absolute top-2 right-4">
+                                                                            <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping"></div>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
                                                             </div>
-                                                            <div className={`${cardSistemaClass} border-2 p-2.5 rounded-xl relative flex flex-col justify-center items-start shadow-sm min-h-[60px] transition-all`}>
-                                                                <label className="text-[9px] uppercase absolute top-1.5 left-3 tracking-widest font-black opacity-40">Stock Sistema</label>
-                                                                <span className="text-[20px] font-black mt-3 ml-1 leading-none">
+                                                            <div className="relative group">
+                                                                <label className={`absolute -top-2 left-4 px-2 ${bgLabelSistema} text-[9px] font-bold ${labelSistemaClass} uppercase tracking-widest transition-all shadow-sm rounded-full z-10`}>Stock Sistema</label>
+                                                                <div className={`w-full flex items-center p-2 border-2 rounded-xl text-[16px] font-bold h-[52px] px-3 shadow-inner ${cardSistemaClass} relative`}>
                                                                     {stockSistema.toLocaleString()}
-                                                                </span>
-                                                                {(estado === 'ERROR DE SISTEMA' || estado === 'REALIZAR NUEVO CONTEO') && (
-                                                                    <div className="absolute top-2 right-4">
-                                                                        <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping"></div>
-                                                                    </div>
-                                                                )}
+                                                                    {(estado === 'ERROR DE SISTEMA' || estado === 'REALIZAR NUEVO CONTEO') && (
+                                                                        <div className="absolute top-2 right-4">
+                                                                            <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping"></div>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
                                                             </div>
-                                                            <div className="flex items-center justify-center">
-                                                                <div className={`${colorClass} px-3 py-2 rounded-[12px] text-[10px] font-black uppercase tracking-[0.05em] shadow-lg border-b-4 flex items-center justify-center min-h-[48px] w-full text-center transition-all animate-in zoom-in duration-300 transform active:scale-95`}>
+                                                            <div className="flex items-center justify-center h-full">
+                                                                <div className={`${colorClass} px-3 rounded-[12px] text-[11px] font-bold uppercase tracking-[0.05em] shadow-lg border-b-4 flex items-center justify-center h-[52px] w-full text-center transition-all animate-in zoom-in duration-300 transform active:scale-95`}>
                                                                     {estado}
                                                                 </div>
                                                             </div>
@@ -1803,7 +1847,7 @@ export default function CompararPage() {
                             </div>
 
                             {/* Modal Footer */}
-                            <div className="p-4 border-t-2 border-gray-100 bg-white rounded-b-2xl sticky bottom-0 z-30">
+                            <div className="p-5 md:p-6 border-t-2 border-gray-100 bg-white rounded-b-2xl sticky bottom-0 z-30">
                                 {activeModal === 'verificacion' && (
                                     <div className="flex justify-between items-center gap-4 mb-4">
                                         {/* Left side: PDF Download */}

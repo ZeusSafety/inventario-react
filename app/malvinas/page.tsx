@@ -45,6 +45,11 @@ export default function MalvinasPage() {
     const [isAvisoOpen, setIsAvisoOpen] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [activeSessionCounts, setActiveSessionCounts] = useState<any>(null); // Datos de conteos por tienda y tipo
+    
+    // Modal de previsualización de Excel
+    const [showPreviewModal, setShowPreviewModal] = useState(false);
+    const [excelPreviewData, setExcelPreviewData] = useState<Array<{codigo: string, cantidad: any, producto?: string}>>([]);
+    const [pendingExcelFile, setPendingExcelFile] = useState<File | null>(null);
 
     const checkExistingCount = async (tipo: 'cajas' | 'stand', tienda: string) => {
         // 1. Verificar primero en el estado local (sincronizado por polling)
@@ -468,8 +473,6 @@ export default function MalvinasPage() {
         const file = e.target.files?.[0];
         if (!file || !currentConteo) return;
 
-        // Procesar archivo sin mostrar alerta (el procesamiento es rápido)
-
         const reader = new FileReader();
         reader.onload = (evt) => {
             try {
@@ -487,11 +490,10 @@ export default function MalvinasPage() {
                 }
 
                 // Encontrar índices de columnas: B=1 (código), N=13 (cantidad)
-                // Primero intentar por posición, luego por nombre como fallback
-                let codigoColIndex = 1; // Columna B (índice 1)
-                let cantidadColIndex = 13; // Columna N (índice 13)
+                let codigoColIndex = 1;
+                let cantidadColIndex = 13;
+                let nombreColIndex = 0; // Columna A para nombre del producto
                 
-                // Verificar si hay encabezados en la primera fila
                 const headerRow = dataArray[0] || [];
                 let foundCodigoByPosition = false;
                 let foundCantidadByPosition = false;
@@ -500,7 +502,6 @@ export default function MalvinasPage() {
                 if (headerRow.length > codigoColIndex && headerRow[codigoColIndex]) {
                     foundCodigoByPosition = true;
                 } else {
-                    // Buscar por nombre como fallback
                     const codigoHeader = headerRow.findIndex((h: any) => {
                         const hStr = String(h || '').toLowerCase().trim();
                         return hStr.includes('codigo') || hStr.includes('código') || hStr.includes('cod');
@@ -515,7 +516,6 @@ export default function MalvinasPage() {
                 if (headerRow.length > cantidadColIndex && headerRow[cantidadColIndex]) {
                     foundCantidadByPosition = true;
                 } else {
-                    // Buscar por nombre SOLO si no hay columna N (fallback)
                     const cantidadHeader = headerRow.findIndex((h: any) => {
                         const hStr = String(h || '').toLowerCase().trim();
                         return hStr.includes('cantidad') || hStr.includes('cant') || hStr.includes('conteo');
@@ -536,10 +536,8 @@ export default function MalvinasPage() {
                     return;
                 }
 
-                // Crear mapa: código -> cantidad (usando posición de columnas)
-                const excelMap = new Map<string, any>();
-                
-                // Empezar desde la fila 1 (saltar encabezados si existen)
+                // Extraer datos para previsualización
+                const previewData: Array<{codigo: string, cantidad: any, producto?: string}> = [];
                 const startRow = headerRow.some((h: any) => String(h || '').toLowerCase().includes('codigo') || String(h || '').toLowerCase().includes('cantidad')) ? 1 : 0;
                 
                 for (let i = startRow; i < dataArray.length; i++) {
@@ -548,40 +546,65 @@ export default function MalvinasPage() {
                     
                     const codigo = String(row[codigoColIndex] || '').trim().toUpperCase();
                     const cantidad = row[cantidadColIndex];
+                    const producto = row[nombreColIndex] ? String(row[nombreColIndex]).trim() : undefined;
                     
                     if (codigo && cantidad !== undefined && cantidad !== null && cantidad !== '') {
-                        excelMap.set(codigo, cantidad);
+                        previewData.push({ codigo, cantidad, producto });
                     }
                 }
 
-                // Actualizar filas usando el mapa (O(n) en lugar de O(n²))
-                let updatedCount = 0;
-                const newFilas = currentConteo.filas.map((fila: any) => {
-                    const codigoNormalizado = String(fila.codigo || '').trim().toUpperCase();
-                    const cantidadExcel = excelMap.get(codigoNormalizado);
-                    
-                    if (cantidadExcel !== undefined && cantidadExcel !== null && cantidadExcel !== '') {
-                        updatedCount++;
-                        return { ...fila, cantidad_conteo: String(cantidadExcel) };
-                    }
-                    return fila;
-                });
-
-                if (updatedCount > 0) {
-                    setCurrentConteo({ ...currentConteo, filas: newFilas });
-                    setShowTable(true);
-                    showAlert('Carga Exitosa', `Se actualizaron ${updatedCount} productos desde el archivo.`, 'success');
-                } else {
-                    showAlert('Aviso', 'No se encontraron coincidencias de CÓDIGO en el archivo. Verifique las columnas.', 'warning');
+                if (previewData.length === 0) {
+                    showAlert('Aviso', 'No se encontraron datos válidos en el archivo Excel.', 'warning');
+                    return;
                 }
+
+                // Mostrar modal de previsualización
+                setExcelPreviewData(previewData);
+                setPendingExcelFile(file);
+                setShowPreviewModal(true);
             } catch (error) {
                 console.error(error);
                 showAlert('Error', 'Hubo un problema al procesar el archivo Excel.', 'error');
             }
         };
         reader.readAsBinaryString(file);
-        // Limpiar input para permitir subir el mismo archivo de nuevo si es necesario
         if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+
+    const handleConfirmExcelUpload = () => {
+        if (!pendingExcelFile || !currentConteo) return;
+
+        // Crear mapa: código -> cantidad
+        const excelMap = new Map<string, any>();
+        excelPreviewData.forEach(item => {
+            excelMap.set(item.codigo, item.cantidad);
+        });
+
+        // Actualizar filas usando el mapa
+        let updatedCount = 0;
+        const newFilas = currentConteo.filas.map((fila: any) => {
+            const codigoNormalizado = String(fila.codigo || '').trim().toUpperCase();
+            const cantidadExcel = excelMap.get(codigoNormalizado);
+            
+            if (cantidadExcel !== undefined && cantidadExcel !== null && cantidadExcel !== '') {
+                updatedCount++;
+                return { ...fila, cantidad_conteo: String(cantidadExcel) };
+            }
+            return fila;
+        });
+
+        if (updatedCount > 0) {
+            setCurrentConteo({ ...currentConteo, filas: newFilas });
+            setShowTable(true);
+            showAlert('Carga Exitosa', `Se actualizaron ${updatedCount} productos desde el archivo.`, 'success');
+        } else {
+            showAlert('Aviso', 'No se encontraron coincidencias de CÓDIGO en el archivo. Verifique las columnas.', 'warning');
+        }
+
+        // Cerrar modal y limpiar
+        setShowPreviewModal(false);
+        setExcelPreviewData([]);
+        setPendingExcelFile(null);
     };
 
     const handleRegistrarInventario = async () => {
@@ -956,9 +979,9 @@ export default function MalvinasPage() {
                                         </div>
                                     </div>
                                     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-                                        <div className="max-h-[500px] overflow-y-auto">
+                                        <div className="overflow-x-auto">
                                             <table className="w-full text-left">
-                                                <thead className="sticky top-0 z-10">
+                                                <thead>
                                                     <tr className="border-b-[4px]" style={{ backgroundColor: '#002D5A', borderColor: '#F4B400' }}>
                                                         <th className="px-4 py-3 text-[10px] font-bold text-white uppercase tracking-wider">ITEM</th>
                                                         <th className="px-4 py-3 text-[10px] font-bold text-white uppercase tracking-wider">PRODUCTO</th>
@@ -1189,6 +1212,71 @@ export default function MalvinasPage() {
                         <li>Ante cualquier duda, <span className="font-bold text-gray-800">deténgase</span> y consulte al responsable.</li>
                     </ul>
                     <p className="text-[11px] text-gray-500 italic">El incumplimiento del procedimiento puede generar observaciones o sanciones conforme a las políticas internas. Al continuar usted declara conocer y cumplir el procedimiento.</p>
+                </div>
+            </Modal>
+
+            {/* Modal de Previsualización de Excel */}
+            <Modal
+                isOpen={showPreviewModal}
+                onClose={() => {
+                    setShowPreviewModal(false);
+                    setExcelPreviewData([]);
+                    setPendingExcelFile(null);
+                }}
+                title={<><FileText className="w-5 h-5" /> Previsualización de Excel</>}
+                size="xl"
+                footer={
+                    <>
+                        <button
+                            className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-full font-bold transition-colors"
+                            onClick={() => {
+                                setShowPreviewModal(false);
+                                setExcelPreviewData([]);
+                                setPendingExcelFile(null);
+                            }}
+                        >
+                            Cancelar
+                        </button>
+                        <button
+                            className="px-4 py-2 bg-[#002D5A] text-white rounded-full font-bold hover:bg-[#001F3D] transition-colors"
+                            onClick={handleConfirmExcelUpload}
+                        >
+                            Confirmar y Cargar
+                        </button>
+                    </>
+                }
+            >
+                <div className="space-y-4">
+                    <div className="bg-blue-50 p-3 rounded-xl border border-blue-100">
+                        <p className="text-xs text-blue-700 font-medium m-0">
+                            Se encontraron <strong>{excelPreviewData.length}</strong> productos en el archivo Excel. Revise los datos antes de confirmar.
+                        </p>
+                    </div>
+
+                    <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+                        <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+                            <table className="w-full">
+                                <thead>
+                                    <tr className="border-b-[4px]" style={{ backgroundColor: '#002D5A', borderColor: '#F4B400' }}>
+                                        <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-white whitespace-nowrap">#</th>
+                                        <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-white whitespace-nowrap">Producto</th>
+                                        <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-white whitespace-nowrap">Código</th>
+                                        <th className="px-3 py-3 text-center text-[10px] font-bold uppercase tracking-wider text-white whitespace-nowrap">Cantidad</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100">
+                                    {excelPreviewData.map((item, idx) => (
+                                        <tr key={idx} className="hover:bg-blue-50/50 transition-colors border-b border-gray-100">
+                                            <td className="px-3 py-4 text-xs text-gray-500">{idx + 1}</td>
+                                            <td className="px-3 py-4 text-xs font-semibold text-gray-900">{item.producto || '-'}</td>
+                                            <td className="px-3 py-4 text-xs text-gray-600 font-medium">{item.codigo}</td>
+                                            <td className="px-3 py-4 text-xs text-center font-bold text-gray-900">{item.cantidad}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
                 </div>
             </Modal>
         </div>

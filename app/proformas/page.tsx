@@ -73,7 +73,8 @@ export default function ProformasPage() {
             showAlert('Información', 'El PDF aún no está disponible.', 'warning');
             return;
         }
-        window.open(`${API_BASE_URL}/?action=descargar_proforma_pdf&archivo=${archivoPdf}`, '_blank');
+        // Las URLs de Google Cloud Storage son públicas y se pueden abrir directamente
+        window.open(archivoPdf, '_blank');
     };
 
     // Pagination logic
@@ -147,25 +148,25 @@ export default function ProformasPage() {
                                             </tr>
                                         ) : (
                                             currentItems.map((pf, idx) => (
-                                                <tr key={pf.id} className="hover:bg-blue-50/50 transition-colors border-b border-gray-100">
-                                                    <td className="px-3 py-4 text-xs font-medium text-gray-900 uppercase">{pf.id}</td>
-                                                    <td className="px-3 py-4 text-xs text-gray-600 uppercase">{pf.fecha}</td>
-                                                    <td className="px-3 py-4 text-xs text-gray-600 uppercase">{pf.asesor}</td>
-                                                    <td className="px-3 py-4 text-xs text-gray-600 uppercase">{pf.registrado}</td>
-                                                    <td className="px-3 py-4 text-xs text-gray-600 uppercase font-bold text-[#0B3B8C]">{pf.almacen}</td>
-                                                    <td className="px-3 py-4 text-xs text-gray-900 font-bold uppercase">{pf.num}</td>
-                                                    <td className="px-3 py-4 text-xs">
+                                                <tr key={pf.id} className="hover:bg-blue-50/50 transition-colors border-b border-gray-100 h-[45px]">
+                                                    <td className="px-3 py-3 text-[10px] font-medium text-gray-900 uppercase">{pf.id}</td>
+                                                    <td className="px-3 py-3 text-[10px] text-gray-600 uppercase">{pf.fecha}</td>
+                                                    <td className="px-3 py-3 text-[10px] text-gray-600 uppercase">{pf.asesor}</td>
+                                                    <td className="px-3 py-3 text-[10px] text-gray-600 uppercase">{pf.registrado}</td>
+                                                    <td className="px-3 py-3 text-[10px] text-gray-600 uppercase font-bold text-[#0B3B8C]">{pf.almacen}</td>
+                                                    <td className="px-3 py-3 text-[10px] text-gray-900 font-bold uppercase">{pf.num}</td>
+                                                    <td className="px-3 py-3 text-[10px]">
                                                         {pf.estado ? (
-                                                            <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-full text-[10px] font-semibold uppercase">
+                                                            <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-[10px] font-bold uppercase">
                                                                 {pf.estado}
                                                             </span>
                                                         ) : (
-                                                            <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded-full text-[10px] font-semibold uppercase">
+                                                            <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full text-[10px] font-bold uppercase">
                                                                 Sin estado
                                                             </span>
                                                         )}
                                                     </td>
-                                                    <td className="px-3 py-4 text-xs text-gray-600">
+                                                    <td className="px-3 py-3 text-[10px] text-gray-600">
                                                         {pf.archivo_pdf ? (
                                                             <button
                                                                 onClick={() => descargarProformaPDF(pf.archivo_pdf || null)}
@@ -178,10 +179,10 @@ export default function ProformasPage() {
                                                             <span className="text-gray-400 text-[10px] italic">No disponible</span>
                                                         )}
                                                     </td>
-                                                    <td className="px-3 py-4 text-center">
+                                                    <td className="px-3 py-3 text-center text-[10px]">
                                                         <div className="flex items-center justify-center gap-2">
                                                             <button
-                                                                className="bg-green-600 text-white px-3 py-1 rounded-full text-[10px] font-bold hover:bg-green-700 transition-colors uppercase shadow-sm"
+                                                                className="bg-green-600 text-white px-2 py-1 rounded-full text-[10px] font-bold hover:bg-green-700 transition-colors uppercase shadow-sm"
                                                                 onClick={() => verDetalleProforma(pf.id)}
                                                                 title="Ver detalle"
                                                             >
@@ -237,7 +238,6 @@ export default function ProformasPage() {
                 isOpen={isModalOpen}
                 onClose={() => {
                     setIsModalOpen(false);
-                    loadProformas();
                 }}
             />
 
@@ -255,42 +255,65 @@ export default function ProformasPage() {
                     <div className="space-y-4">
                         <div className="grid grid-cols-2 gap-4">
                             <div>
-                                <label className="text-xs font-semibold text-gray-600 uppercase">Número de Proforma</label>
-                                <p className="text-sm font-bold text-gray-900">{selectedProforma.proforma?.numero_proforma}</p>
+                                <label className="text-xs font-semibold text-gray-600 uppercase mb-1 block">Número de Proforma</label>
+                                <input
+                                    type="text"
+                                    value={selectedProforma.proforma?.numero_proforma || ''}
+                                    readOnly
+                                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-bold text-gray-900"
+                                />
                             </div>
                             <div>
-                                <label className="text-xs font-semibold text-gray-600 uppercase">Fecha de Registro</label>
-                                <p className="text-sm text-gray-700">{selectedProforma.proforma?.fecha_formateada}</p>
+                                <label className="text-xs font-semibold text-gray-600 uppercase mb-1 block">Fecha de Registro</label>
+                                <input
+                                    type="text"
+                                    value={selectedProforma.proforma?.fecha_formateada || ''}
+                                    readOnly
+                                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700"
+                                />
                             </div>
                             <div>
-                                <label className="text-xs font-semibold text-gray-600 uppercase">Asesor</label>
-                                <p className="text-sm text-gray-700">{selectedProforma.proforma?.asesor}</p>
+                                <label className="text-xs font-semibold text-gray-600 uppercase mb-1 block">Asesor</label>
+                                <input
+                                    type="text"
+                                    value={selectedProforma.proforma?.asesor || ''}
+                                    readOnly
+                                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700"
+                                />
                             </div>
                             <div>
-                                <label className="text-xs font-semibold text-gray-600 uppercase">Registrado por</label>
-                                <p className="text-sm text-gray-700">{selectedProforma.proforma?.registrado_por}</p>
+                                <label className="text-xs font-semibold text-gray-600 uppercase mb-1 block">Registrado por</label>
+                                <input
+                                    type="text"
+                                    value={selectedProforma.proforma?.registrado_por || ''}
+                                    readOnly
+                                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700"
+                                />
                             </div>
                             <div>
-                                <label className="text-xs font-semibold text-gray-600 uppercase">Almacén</label>
-                                <p className="text-sm font-bold text-[#0B3B8C] uppercase">{selectedProforma.proforma?.almacen}</p>
+                                <label className="text-xs font-semibold text-gray-600 uppercase mb-1 block">Almacén</label>
+                                <input
+                                    type="text"
+                                    value={selectedProforma.proforma?.almacen || ''}
+                                    readOnly
+                                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-bold text-[#0B3B8C] uppercase"
+                                />
                             </div>
                             <div>
-                                <label className="text-xs font-semibold text-gray-600 uppercase">Estado</label>
-                                <p className="text-sm">
-                                    {selectedProforma.proforma?.estado ? (
-                                        <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-semibold uppercase">
-                                            {selectedProforma.proforma.estado}
-                                        </span>
-                                    ) : (
-                                        <span className="text-gray-400 italic">Sin estado</span>
-                                    )}
-                                </p>
+                                <label className="text-xs font-semibold text-gray-600 uppercase mb-1 block">Estado</label><br />
+                                {selectedProforma.proforma?.estado ? (
+                                    <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-semibold uppercase inline-block">
+                                        {selectedProforma.proforma.estado}
+                                    </span>
+                                ) : (
+                                    <span className="text-gray-400 italic text-sm">Sin estado</span>
+                                )}
                             </div>
                         </div>
 
                         <div className="border-t pt-4">
                             <h6 className="font-bold text-gray-700 mb-3 text-sm uppercase">Productos ({selectedProforma.total_productos || 0})</h6>
-                            <div className="bg-white rounded-2xl shadow-lg border border-gray-200/60 overflow-hidden">
+                            <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
                                 <div className="overflow-x-auto">
                                     <table className="w-full text-xs">
                                         <thead>
@@ -328,13 +351,13 @@ export default function ProformasPage() {
 
                         <div className="flex gap-2 pt-4 border-t">
                             <button
-                                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-colors"
+                                className="flex-1 px-4 py-1.5 bg-[#002D5A] text-white rounded-full text-[10px] font-bold hover:bg-[#001F3D] transition-colors"
                                 onClick={() => actualizarEstadoProforma(selectedProforma.proforma?.id, 'PROFORMA INGRESADA')}
                             >
                                 Marcar como Ingresada
                             </button>
                             <button
-                                className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg text-xs font-bold hover:bg-green-700 transition-colors"
+                                className="flex-1 px-4 py-1.5 bg-green-600 text-white rounded-full text-[10px] font-bold hover:bg-green-700 transition-colors"
                                 onClick={() => actualizarEstadoProforma(selectedProforma.proforma?.id, 'TIENE COMPROBANTE')}
                             >
                                 Marcar con Comprobante

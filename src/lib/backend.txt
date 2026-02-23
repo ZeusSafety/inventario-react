@@ -6562,6 +6562,76 @@ def registrar_proforma(data):
         if 'conn' in locals():
             conn.close()
 
+def subir_pdf_proforma(request):
+    """
+    Sube el PDF de una proforma a Google Cloud Storage y actualiza el campo archivo_pdf
+    """
+    try:
+        if 'proforma_id' not in request.form:
+            return {'success': False, 'message': 'Falta el campo obligatorio: proforma_id'}
+        
+        if 'pdf_file' not in request.files:
+            return {'success': False, 'message': 'No se encontró el archivo PDF'}
+        
+        proforma_id = int(request.form.get('proforma_id'))
+        pdf_file = request.files['pdf_file']
+        
+        if pdf_file.filename == '':
+            return {'success': False, 'message': 'No se seleccionó archivo'}
+        
+        # Generar nombre único para el archivo
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        nombre_archivo = f"proforma_{proforma_id}_{timestamp}.pdf"
+        pdf_file.filename = nombre_archivo
+        
+        # Subir a Google Cloud Storage
+        try:
+            bucket = storage_client.bucket(BUCKET_NAME)
+            # Carpeta específica para proformas
+            object_name = f"proformas/{nombre_archivo}"
+            blob = bucket.blob(object_name)
+            
+            # Sube el archivo directamente
+            blob.upload_from_file(pdf_file, content_type='application/pdf')
+            
+            # Genera la URL pública
+            archivo_url = f"https://storage.googleapis.com/{BUCKET_NAME}/{object_name}"
+        except Exception as gcs_error:
+            logging.error(f"Error al subir a Cloud Storage: {gcs_error}")
+            return {'success': False, 'message': f'Error al subir el archivo PDF: {str(gcs_error)}'}
+        
+        # Actualizar el campo archivo_pdf en la base de datos
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            UPDATE proformas
+            SET archivo_pdf = %s
+            WHERE id = %s
+        """, (archivo_url, proforma_id))
+        
+        conn.commit()
+        
+        logging.info(f"PDF de proforma {proforma_id} subido correctamente: {archivo_url}")
+        
+        return {
+            'success': True,
+            'message': 'PDF subido correctamente',
+            'archivo_pdf': archivo_url
+        }
+        
+    except Exception as e:
+        if 'conn' in locals():
+            conn.rollback()
+        logging.error(f"Error en subir_pdf_proforma: {str(e)}")
+        logging.error(traceback.format_exc())
+        return {'success': False, 'message': f'Error al subir PDF: {str(e)}'}
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
+        if 'conn' in locals():
+            conn.close()
+
 def obtener_productos_para_proforma(inventario_id, almacen):
     """
     Obtiene el listado de productos disponibles para proforma con su stock físico actual
@@ -6956,6 +7026,436 @@ def actualizar_estado_proforma(data):
             cursor.close()
         if 'conn' in locals():
             conn.close()
+
+# ***********************************************************************
+# =======================================================================
+# FUNCIONES PARA MODULO DE PROFORMAS
+# =======================================================================
+# ***********************************************************************
+def obtener_fichero_inventarios():
+    """
+    Retorna el listado de todos los inventarios (fichero visual)
+    con sus contadores de conteos, proformas, verificaciones y acciones.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT 
+                i.id,
+                i.numero_inventario,
+                i.area,
+                i.autorizado_por,
+                i.fecha_hora_asignacion,
+                i.estado,
+                i.fecha_cierre,
+                i.observaciones,
+                (SELECT COUNT(*) FROM conteos c WHERE c.inventario_id = i.id) AS total_conteos,
+                (SELECT COUNT(*) FROM proformas p WHERE p.inventario_id = i.id) AS total_proformas,
+                (SELECT COUNT(*) FROM verificaciones v WHERE v.inventario_id = i.id) AS total_verificaciones,
+                (SELECT COUNT(*) FROM historial_acciones_comparacion h WHERE h.inventario_id = i.id) AS total_acciones
+            FROM inventarios i
+            ORDER BY i.fecha_hora_asignacion DESC
+        """)
+        inventarios = cursor.fetchall()
+        return {
+            'success': True,
+            'inventarios': inventarios,
+            'total': len(inventarios)
+        }
+    except Exception as e:
+        logging.error(f"[obtener_fichero_inventarios] Error: {e}")
+        return {'success': False, 'message': str(e)}
+    finally:
+        cursor.close()
+        conn.close()
+
+def obtener_consolidado_registro(inventario_id):
+    """
+    Retorna las 3 secciones del consolidado de un inventario
+    para mostrar en el modal del módulo de Registro:
+    - Callao
+    - Malvinas
+    - General
+    """
+    if not inventario_id:
+        return {'success': False, 'message': 'Se requiere inventario_id'}
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        inventario_id = int(inventario_id)
+
+        # Datos del inventario
+        cursor.execute("""
+            SELECT id, numero_inventario, area, autorizado_por,
+                   fecha_hora_asignacion, estado
+            FROM inventarios
+            WHERE id = %s
+        """, (inventario_id,))
+        inventario = cursor.fetchone()
+
+        if not inventario:
+            return {'success': False, 'message': 'Inventario no encontrado'}
+
+        # Sección Callao
+        cursor.execute("""
+            SELECT 
+                cc.id, cc.producto_item, cc.producto, cc.codigo,
+                cc.sistema, cc.fisico, cc.diferencia,
+                CASE 
+                    WHEN cc.diferencia > 0 THEN 'SOBRANTE'
+                    WHEN cc.diferencia < 0 THEN 'FALTANTE'
+                    ELSE 'CONFORME'
+                END AS resultado,
+                cc.unidad_medida, cc.ultima_actualizacion
+            FROM consolidado_inventario_callao cc
+            WHERE cc.inventario_id = %s
+            ORDER BY cc.producto
+        """, (inventario_id,))
+        callao = cursor.fetchall()
+
+        # Sección Malvinas
+        cursor.execute("""
+            SELECT 
+                cm.id, cm.producto_item, cm.producto, cm.codigo,
+                cm.sistema, cm.fisico, cm.diferencia,
+                CASE 
+                    WHEN cm.diferencia > 0 THEN 'SOBRANTE'
+                    WHEN cm.diferencia < 0 THEN 'FALTANTE'
+                    ELSE 'CONFORME'
+                END AS resultado,
+                cm.unidad_medida, cm.ultima_actualizacion
+            FROM consolidado_inventario_malvinas cm
+            WHERE cm.inventario_id = %s
+            ORDER BY cm.producto
+        """, (inventario_id,))
+        malvinas = cursor.fetchall()
+
+        # Sección General
+        cursor.execute("""
+            SELECT 
+                cg.id, cg.producto_item, cg.producto, cg.codigo,
+                cg.total_sistema, cg.total_fisico, cg.diferencia,
+                cg.resultado, cg.unidad_medida,
+                cg.callao_sistema, cg.callao_fisico,
+                cg.malvinas_sistema, cg.malvinas_fisico,
+                cg.ultima_actualizacion
+            FROM consolidado_general cg
+            WHERE cg.inventario_id = %s
+            ORDER BY cg.producto
+        """, (inventario_id,))
+        general = cursor.fetchall()
+
+        # Resumen de totales
+        resumen_callao = {
+            'total_productos': len(callao),
+            'conformes': sum(1 for r in callao if r['resultado'] == 'CONFORME'),
+            'sobrantes': sum(1 for r in callao if r['resultado'] == 'SOBRANTE'),
+            'faltantes': sum(1 for r in callao if r['resultado'] == 'FALTANTE'),
+        }
+        resumen_malvinas = {
+            'total_productos': len(malvinas),
+            'conformes': sum(1 for r in malvinas if r['resultado'] == 'CONFORME'),
+            'sobrantes': sum(1 for r in malvinas if r['resultado'] == 'SOBRANTE'),
+            'faltantes': sum(1 for r in malvinas if r['resultado'] == 'FALTANTE'),
+        }
+        resumen_general = {
+            'total_productos': len(general),
+            'conformes': sum(1 for r in general if r['resultado'] == 'CONFORME'),
+            'sobrantes': sum(1 for r in general if r['resultado'] == 'SOBRANTE'),
+            'faltantes': sum(1 for r in general if r['resultado'] == 'FALTANTE'),
+        }
+
+        return {
+            'success': True,
+            'inventario': inventario,
+            'consolidado': {
+                'callao': {
+                    'datos': callao,
+                    'resumen': resumen_callao
+                },
+                'malvinas': {
+                    'datos': malvinas,
+                    'resumen': resumen_malvinas
+                },
+                'general': {
+                    'datos': general,
+                    'resumen': resumen_general
+                }
+            }
+        }
+    except Exception as e:
+        logging.error(f"[obtener_consolidado_registro] Error: {e}")
+        return {'success': False, 'message': str(e)}
+    finally:
+        cursor.close()
+        conn.close()
+
+def obtener_proformas_registro(inventario_id):
+    """
+    Retorna el listado de proformas de un inventario
+    con el resumen de productos por proforma.
+    """
+    if not inventario_id:
+        return {'success': False, 'message': 'Se requiere inventario_id'}
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        inventario_id = int(inventario_id)
+
+        cursor.execute("""
+            SELECT 
+                p.id AS proforma_id,
+                p.inventario_id,
+                i.numero_inventario,
+                p.numero_proforma,
+                p.asesor,
+                p.almacen,
+                p.registrado_por,
+                p.fecha_hora_registro,
+                p.estado,
+                p.observaciones,
+                p.archivo_pdf,
+                COUNT(dp.id)                                                  AS total_productos,
+                COALESCE(SUM(dp.cantidad), 0)                                 AS cantidad_total_items,
+                SUM(CASE WHEN dp.descuento_aplicado = TRUE THEN 1 ELSE 0 END) AS productos_descontados
+            FROM proformas p
+            INNER JOIN inventarios i ON i.id = p.inventario_id
+            LEFT JOIN detalle_proformas dp ON dp.proforma_id = p.id
+            WHERE p.inventario_id = %s
+            GROUP BY 
+                p.id, p.inventario_id, i.numero_inventario, p.numero_proforma,
+                p.asesor, p.almacen, p.registrado_por, p.fecha_hora_registro,
+                p.estado, p.observaciones, p.archivo_pdf
+            ORDER BY p.fecha_hora_registro DESC
+        """, (inventario_id,))
+        proformas = cursor.fetchall()
+
+        return {
+            'success': True,
+            'inventario_id': inventario_id,
+            'proformas': proformas,
+            'total': len(proformas)
+        }
+    except Exception as e:
+        logging.error(f"[obtener_proformas_registro] Error: {e}")
+        return {'success': False, 'message': str(e)}
+    finally:
+        cursor.close()
+        conn.close()
+
+def obtener_verificaciones_registro(inventario_id):
+    """
+    Retorna el listado de todas las verificaciones
+    realizadas durante un inventario.
+    """
+    if not inventario_id:
+        return {'success': False, 'message': 'Se requiere inventario_id'}
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        inventario_id = int(inventario_id)
+
+        cursor.execute("""
+            SELECT 
+                v.id AS verificacion_id,
+                v.inventario_id,
+                i.numero_inventario,
+                v.almacen,
+                v.codigo_producto,
+                v.producto,
+                v.compras_totales,
+                v.ventas_totales,
+                v.stock_existencia,
+                v.stock_fisico,
+                v.stock_sistema,
+                v.estado_verificacion,
+                v.mensaje_estado,
+                v.registrado_por,
+                v.observaciones,
+                v.fecha_hora,
+                v.fecha_actualizacion
+            FROM verificaciones v
+            INNER JOIN inventarios i ON i.id = v.inventario_id
+            WHERE v.inventario_id = %s
+            ORDER BY v.fecha_hora DESC
+        """, (inventario_id,))
+        verificaciones = cursor.fetchall()
+
+        # Resumen por estado
+        resumen = {
+            'total': len(verificaciones),
+            'CONFORME': sum(1 for v in verificaciones if v['estado_verificacion'] == 'CONFORME'),
+            'ERROR_SISTEMA': sum(1 for v in verificaciones if v['estado_verificacion'] == 'ERROR_SISTEMA'),
+            'ERROR_LOGISTICA': sum(1 for v in verificaciones if v['estado_verificacion'] == 'ERROR_LOGISTICA'),
+            'NUEVO_CONTEO_REQUERIDO': sum(1 for v in verificaciones if v['estado_verificacion'] == 'NUEVO_CONTEO_REQUERIDO'),
+        }
+
+        return {
+            'success': True,
+            'inventario_id': inventario_id,
+            'verificaciones': verificaciones,
+            'resumen': resumen
+        }
+    except Exception as e:
+        logging.error(f"[obtener_verificaciones_registro] Error: {e}")
+        return {'success': False, 'message': str(e)}
+    finally:
+        cursor.close()
+        conn.close()
+
+def obtener_acciones_registro(inventario_id):
+    """
+    Retorna el historial de todas las acciones realizadas
+    en el módulo de comparación durante un inventario.
+    """
+    if not inventario_id:
+        return {'success': False, 'message': 'Se requiere inventario_id'}
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        inventario_id = int(inventario_id)
+
+        cursor.execute("""
+            SELECT 
+                h.id AS accion_id,
+                h.inventario_id,
+                i.numero_inventario,
+                h.almacen,
+                h.codigo,
+                h.producto,
+                h.tipo_accion,
+                h.motivo,
+                h.cantidad_afectada,
+                h.error_de,
+                h.registrado_por,
+                h.fecha_hora,
+                h.detalles
+            FROM historial_acciones_comparacion h
+            INNER JOIN inventarios i ON i.id = h.inventario_id
+            WHERE h.inventario_id = %s
+            ORDER BY h.fecha_hora DESC
+        """, (inventario_id,))
+        acciones = cursor.fetchall()
+
+        # Parsear el campo JSON si viene como string
+        for accion in acciones:
+            if accion.get('detalles') and isinstance(accion['detalles'], str):
+                try:
+                    accion['detalles'] = json.loads(accion['detalles'])
+                except Exception:
+                    pass
+
+        # Resumen por tipo de acción
+        resumen = {}
+        for accion in acciones:
+            tipo = accion['tipo_accion']
+            resumen[tipo] = resumen.get(tipo, 0) + 1
+
+        return {
+            'success': True,
+            'inventario_id': inventario_id,
+            'acciones': acciones,
+            'total': len(acciones),
+            'resumen_por_tipo': resumen
+        }
+    except Exception as e:
+        logging.error(f"[obtener_acciones_registro] Error: {e}")
+        return {'success': False, 'message': str(e)}
+    finally:
+        cursor.close()
+        conn.close()
+
+def obtener_conteos_registro(inventario_id):
+    """
+    Retorna el listado de todos los conteos realizados
+    durante un inventario con los campos requeridos para
+    el botón 'Conteos por Almacén (Cajas/Stand)'.
+    Campos: Almacén, N° inventario, Tipo conteo/Tienda,
+            Registrado por, Inicio, Fin, Autorizado.
+    """
+    if not inventario_id:
+        return {'success': False, 'message': 'Se requiere inventario_id'}
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        inventario_id = int(inventario_id)
+
+        cursor.execute("""
+            SELECT 
+                c.id AS conteo_id,
+                c.inventario_id,
+                i.numero_inventario,
+                a.nombre                                           AS almacen,
+                c.tipo_conteo,
+                t.nombre_tienda                                    AS tienda,
+                CASE 
+                    WHEN t.nombre_tienda IS NOT NULL 
+                        THEN CONCAT(c.tipo_conteo, ' / ', t.nombre_tienda)
+                    ELSE c.tipo_conteo
+                END                                                AS tipo_conteo_tienda,
+                c.registrado_por,
+                c.fecha_hora_inicio,
+                c.fecha_hora_final,
+                TIMESTAMPDIFF(
+                    MINUTE, c.fecha_hora_inicio, c.fecha_hora_final
+                )                                                  AS duracion_minutos,
+                c.estado,
+                c.origen_datos,
+                c.observaciones,
+                i.autorizado_por                                   AS autorizado,
+                (
+                    SELECT COUNT(*)
+                    FROM detalle_conteo dc
+                    WHERE dc.conteo_id = c.id
+                )                                                  AS total_productos_contados
+            FROM conteos c
+            INNER JOIN inventarios i ON i.id = c.inventario_id
+            INNER JOIN almacenes a   ON a.id = c.almacen_id
+            LEFT JOIN  tiendas t     ON t.id = c.tienda_id
+            WHERE c.inventario_id = %s
+            ORDER BY c.fecha_hora_inicio DESC
+        """, (inventario_id,))
+        conteos = cursor.fetchall()
+
+        # Agrupación por almacén para el resumen
+        resumen = {}
+        for conteo in conteos:
+            alm = conteo['almacen']
+            if alm not in resumen:
+                resumen[alm] = {
+                    'total_conteos': 0,
+                    'finalizados': 0,
+                    'en_proceso': 0,
+                    'cancelados': 0
+                }
+            resumen[alm]['total_conteos'] += 1
+            estado = conteo['estado']
+            if estado == 'finalizado':
+                resumen[alm]['finalizados'] += 1
+            elif estado == 'en_proceso':
+                resumen[alm]['en_proceso'] += 1
+            elif estado == 'cancelado':
+                resumen[alm]['cancelados'] += 1
+
+        return {
+            'success': True,
+            'inventario_id': inventario_id,
+            'conteos': conteos,
+            'total': len(conteos),
+            'resumen_por_almacen': resumen
+        }
+    except Exception as e:
+        logging.error(f"[obtener_conteos_registro] Error: {e}")
+        return {'success': False, 'message': str(e)}
+    finally:
+        cursor.close()
+        conn.close()
  
 # ============================================================
 # FUNCIÓN PRINCIPAL
@@ -7379,6 +7879,64 @@ def inventario_general_logistica(request):
         # ACTUALIZAR ESTADO PROFORMA (POST)
         elif action == 'actualizar_estado_proforma' and method == 'POST':
             response_data = actualizar_estado_proforma(request_json)
+        
+        # SUBIR PDF PROFORMA (POST)
+        elif action == 'subir_pdf_proforma' and method == 'POST':
+            response_data = subir_pdf_proforma(request)
+
+        # ======================================================
+        # ACCIONES PARA MÓDULO DE REGISTRO
+        # ======================================================
+        
+        # OBTENER FICHERO DE INVENTARIOS (GET)
+        # Muestra la lista de todos los inventarios (vista principal del módulo)
+        elif action == 'obtener_fichero_inventarios' and method == 'GET':
+            response_data = obtener_fichero_inventarios()
+
+        # OBTENER CONSOLIDADO PARA MODAL (GET)
+        # Botón "Ver detalle de acciones" → opción Consolidado
+        elif action == 'obtener_consolidado_registro' and method == 'GET':
+            inventario_id = request.args.get('inventario_id')
+            if inventario_id:
+                response_data = obtener_consolidado_registro(inventario_id)
+            else:
+                response_data = {'success': False, 'message': 'Se requiere inventario_id'}
+
+        # OBTENER PROFORMAS DEL INVENTARIO (GET)
+        # Botón "Ver detalle de acciones" → opción Proformas
+        elif action == 'obtener_proformas_registro' and method == 'GET':
+            inventario_id = request.args.get('inventario_id')
+            if inventario_id:
+                response_data = obtener_proformas_registro(inventario_id)
+            else:
+                response_data = {'success': False, 'message': 'Se requiere inventario_id'}
+
+        # OBTENER VERIFICACIONES DEL INVENTARIO (GET)
+        # Botón "Ver detalle de acciones" → opción Verificaciones
+        elif action == 'obtener_verificaciones_registro' and method == 'GET':
+            inventario_id = request.args.get('inventario_id')
+            if inventario_id:
+                response_data = obtener_verificaciones_registro(inventario_id)
+            else:
+                response_data = {'success': False, 'message': 'Se requiere inventario_id'}
+
+        # OBTENER ACCIONES DE COMPARACIÓN DEL INVENTARIO (GET)
+        # Botón "Ver detalle de acciones" → opción Acciones
+        elif action == 'obtener_acciones_registro' and method == 'GET':
+            inventario_id = request.args.get('inventario_id')
+            if inventario_id:
+                response_data = obtener_acciones_registro(inventario_id)
+            else:
+                response_data = {'success': False, 'message': 'Se requiere inventario_id'}
+
+        # OBTENER CONTEOS POR ALMACÉN DEL INVENTARIO (GET)
+        # Botón "Conteos por Almacén (Cajas/Stand)"
+        elif action == 'obtener_conteos_registro' and method == 'GET':
+            inventario_id = request.args.get('inventario_id')
+            if inventario_id:
+                response_data = obtener_conteos_registro(inventario_id)
+            else:
+                response_data = {'success': False, 'message': 'Se requiere inventario_id'}
 
         return (json.dumps(response_data, default=str), 200, headers)
         

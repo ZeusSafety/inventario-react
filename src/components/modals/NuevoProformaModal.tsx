@@ -3,8 +3,10 @@
 import React, { useState, useEffect } from 'react';
 import Modal from '../Modal';
 import { useInventory } from '@/context/InventoryContext';
-import { apiCall } from '@/lib/api';
-import { Receipt, Plus, Trash2, Save, Search, Loader2 } from 'lucide-react';
+import { apiCall, apiCallFormData } from '@/lib/api';
+import { Receipt, Plus, Trash2, Save, Loader2 } from 'lucide-react';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 interface Props {
     isOpen: boolean;
@@ -194,6 +196,65 @@ export default function NuevoProformaModal({ isOpen, onClose }: Props) {
             const response = await apiCall('registrar_proforma', 'POST', data);
 
             if (response.success) {
+                const proforma_id = response.proforma_id;
+                
+                // Generar PDF de la proforma
+                try {
+                    console.log('📄 Generando PDF para proforma:', proforma_id);
+                    const doc = new jsPDF();
+                    
+                    // Encabezado
+                    doc.setFontSize(16);
+                    doc.text('PROFORMA', 14, 20);
+                    
+                    doc.setFontSize(10);
+                    doc.text(`N° Proforma: ${data.numero_proforma}`, 14, 30);
+                    doc.text(`Asesor: ${data.asesor}`, 14, 36);
+                    doc.text(`Almacén: ${data.almacen.toUpperCase()}`, 14, 42);
+                    doc.text(`Registrado por: ${data.registrado_por}`, 14, 48);
+                    doc.text(`Fecha: ${new Date().toLocaleString('es-PE')}`, 14, 54);
+                    
+                    // Tabla de productos
+                    const tableBody = productosSeleccionados.map((p, idx) => [
+                        idx + 1,
+                        p.producto,
+                        p.codigo,
+                        p.cantidad.toString(),
+                        p.unidad_medida
+                    ]);
+                    
+                    autoTable(doc, {
+                        startY: 60,
+                        head: [['#', 'Producto', 'Código', 'Cantidad', 'Unidad']],
+                        body: tableBody,
+                        theme: 'grid',
+                        headStyles: { fillColor: [0, 45, 90] },
+                    });
+                    
+                    // Convertir PDF a blob
+                    const pdfBlob = doc.output('blob');
+                    const pdfFile = new File([pdfBlob], `proforma_${data.numero_proforma}_${proforma_id}.pdf`, { type: 'application/pdf' });
+                    
+                    console.log('📤 Subiendo PDF al servidor...');
+                    
+                    // Subir PDF al servidor
+                    const formData = new FormData();
+                    formData.append('proforma_id', proforma_id.toString());
+                    formData.append('pdf_file', pdfFile);
+                    
+                    const uploadResult = await apiCallFormData('subir_pdf_proforma', formData);
+                    console.log('📥 Respuesta de subida de PDF:', uploadResult);
+                    
+                    if (uploadResult.success) {
+                        console.log('✅ PDF subido correctamente:', uploadResult.archivo_pdf);
+                    } else {
+                        console.warn('⚠️ No se pudo subir el PDF:', uploadResult.message);
+                    }
+                } catch (pdfError) {
+                    console.error('❌ Error generando/subiendo PDF:', pdfError);
+                    // No bloquear el flujo si falla la generación del PDF
+                }
+                
                 // Disparar evento inmediatamente para que otras páginas empiecen a recargar
                 if (typeof window !== 'undefined') {
                     window.dispatchEvent(new CustomEvent('proformaRegistrada', { 
@@ -203,14 +264,18 @@ export default function NuevoProformaModal({ isOpen, onClose }: Props) {
                 
                 showAlert('¡Éxito!', response.message || 'Proforma registrada exitosamente.', 'success');
                 
-                // Cargar proformas en segundo plano sin bloquear
-                loadProformas().catch(err => console.error('Error al cargar proformas:', err));
-                
-                // Cerrar modal después de un breve delay para que el usuario vea el mensaje
-                setTimeout(() => {
-                    onClose();
-                }, 300);
-            } else {
+                // Esperar a que el PDF se haya guardado en la BD antes de recargar
+                // Aumentamos el tiempo para dar más margen a la base de datos
+                setTimeout(async () => {
+                    console.log('🔄 Recargando proformas después de subir PDF...');
+                    await loadProformas();
+                    
+                    // Cerrar modal después de recargar las proformas
+                    setTimeout(() => {
+                        onClose();
+                    }, 200);
+                }, 1500); // Aumentado a 1.5 segundos para dar tiempo a la BD
+           } else {
                 showAlert('Error', response.message || 'Error al registrar proforma', 'error');
             }
         } catch (e) {
@@ -238,16 +303,20 @@ export default function NuevoProformaModal({ isOpen, onClose }: Props) {
                     <button className="btn btn-secondary" onClick={onClose} disabled={loading}>
                         Cancelar
                     </button>
-                    <button className="btn btn-primary" onClick={handleSave} disabled={loading}>
+                    <button 
+                        className="px-4 py-2 bg-[#002D5A] text-white rounded-full text-xs font-bold hover:bg-[#001F3D] transition-colors flex items-center gap-2 whitespace-nowrap" 
+                        onClick={handleSave} 
+                        disabled={loading}
+                    >
                         {loading ? (
                             <>
-                                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                                Guardando...
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                                <span>Guardando...</span>
                             </>
                         ) : (
                             <>
-                                <Save className="w-4 h-4 mr-2" />
-                                Guardar Proforma
+                                <Save className="w-4 h-4" />
+                                <span>Guardar Proforma</span>
                             </>
                         )}
                     </button>
@@ -256,16 +325,17 @@ export default function NuevoProformaModal({ isOpen, onClose }: Props) {
         >
             <div className="space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="form-floating">
+                    <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Asesor Comercial</label>
                         <input
                             className="form-control"
-                            placeholder="Asesor"
+                            placeholder="Ingrese asesor"
                             value={formData.asesor}
                             onChange={e => setFormData({ ...formData, asesor: e.target.value })}
                         />
-                        <label>Asesor Comercial *</label>
                     </div>
-                    <div className="form-floating">
+                    <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Almacén de Salida</label>
                         <select
                             className="form-select"
                             value={formData.almacen}
@@ -277,25 +347,24 @@ export default function NuevoProformaModal({ isOpen, onClose }: Props) {
                             <option value="callao">Almacén Callao</option>
                             <option value="malvinas">Almacén Malvinas</option>
                         </select>
-                        <label>Almacén de Salida *</label>
                     </div>
-                    <div className="form-floating">
+                    <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Registrado por</label>
                         <input
                             className="form-control"
-                            placeholder="Registrado por"
+                            placeholder="Ingrese usuario"
                             value={formData.registrado_por}
                             onChange={e => setFormData({ ...formData, registrado_por: e.target.value })}
                         />
-                        <label>Registrado por *</label>
                     </div>
-                    <div className="form-floating">
+                    <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Número de Proforma (Alfanumérico)</label>
                         <input
                             className="form-control"
-                            placeholder="N° Proforma"
+                            placeholder="Ingrese N° de Proforma"
                             value={formData.numero_proforma}
                             onChange={e => setFormData({ ...formData, numero_proforma: e.target.value })}
                         />
-                        <label>Número de Proforma (Alfanumérico) *</label>
                     </div>
                 </div>
 
@@ -313,9 +382,8 @@ export default function NuevoProformaModal({ isOpen, onClose }: Props) {
                         <>
                             <div className="grid grid-cols-1 md:grid-cols-12 gap-2 mb-4">
                                 <div className="md:col-span-7 relative">
-                                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
                                     <input
-                                        className="form-control pl-10"
+                                        className="form-control"
                                         placeholder="Buscar producto por nombre o código..."
                                         value={busquedaProducto}
                                         onChange={e => {
@@ -385,11 +453,11 @@ export default function NuevoProformaModal({ isOpen, onClose }: Props) {
                                 </div>
                                 <div className="md:col-span-2">
                                     <button
-                                        className="btn btn-primary w-full h-full p-0 flex items-center justify-center"
+                                        className="w-full h-full px-3 py-2 bg-[#002D5A] text-white rounded-full font-bold hover:bg-[#001F3D] transition-colors flex items-center justify-center disabled:bg-gray-400 disabled:cursor-not-allowed"
                                         onClick={agregarProducto}
                                         disabled={!productoSeleccionado || !cantidadProducto}
                                     >
-                                        <Plus className="w-5 h-5" />
+                                        <Plus className="w-4 h-4" />
                                     </button>
                                 </div>
                             </div>
@@ -405,44 +473,46 @@ export default function NuevoProformaModal({ isOpen, onClose }: Props) {
                                 </div>
                             )}
 
-                            <div className="table-responsive rounded-lg border bg-white">
-                                <table className="table table-sm mb-0">
-                                    <thead className="bg-[#002D5A] text-white">
-                                        <tr>
-                                            <th className="px-3 py-2 text-[10px] uppercase">Producto</th>
-                                            <th className="px-3 py-2 text-[10px] uppercase">Código</th>
-                                            <th className="px-3 py-2 text-[10px] uppercase w-24 text-center">Cantidad</th>
-                                            <th className="px-3 py-2 text-[10px] uppercase w-20 text-center">Unidad</th>
-                                            <th className="px-3 py-2 text-[10px] uppercase w-16 text-center"></th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {productosSeleccionados.length === 0 ? (
-                                            <tr>
-                                                <td colSpan={5} className="text-center py-4 text-xs text-gray-400 italic">
-                                                    No hay productos agregados
-                                                </td>
+                            <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+                                <div className="overflow-x-auto">
+                                    <table className="w-full">
+                                        <thead>
+                                            <tr className="border-b-[4px]" style={{ backgroundColor: '#002D5A', borderColor: '#F4B400' }}>
+                                                <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-white whitespace-nowrap">Producto</th>
+                                                <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-white whitespace-nowrap">Código</th>
+                                                <th className="px-3 py-3 text-center text-[10px] font-bold uppercase tracking-wider text-white whitespace-nowrap">Cantidad</th>
+                                                <th className="px-3 py-3 text-center text-[10px] font-bold uppercase tracking-wider text-white whitespace-nowrap">Unidad</th>
+                                                <th className="px-3 py-3 text-center text-[10px] font-bold uppercase tracking-wider text-white whitespace-nowrap"></th>
                                             </tr>
-                                        ) : (
-                                            productosSeleccionados.map((p) => (
-                                                <tr key={p.id}>
-                                                    <td className="px-3 py-2 text-xs font-semibold">{p.producto}</td>
-                                                    <td className="px-3 py-2 text-xs">{p.codigo}</td>
-                                                    <td className="px-3 py-2 text-xs text-center font-bold">{p.cantidad}</td>
-                                                    <td className="px-3 py-2 text-xs text-center">{p.unidad_medida}</td>
-                                                    <td className="px-3 py-2 text-center">
-                                                        <button
-                                                            className="text-red-500 hover:text-red-700 p-1"
-                                                            onClick={() => eliminarProducto(p.id)}
-                                                        >
-                                                            <Trash2 className="w-4 h-4" />
-                                                        </button>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-100">
+                                            {productosSeleccionados.length === 0 ? (
+                                                <tr>
+                                                    <td colSpan={5} className="text-center py-4 text-xs text-gray-400 italic">
+                                                        No hay productos agregados
                                                     </td>
                                                 </tr>
-                                            ))
-                                        )}
-                                    </tbody>
-                                </table>
+                                            ) : (
+                                                productosSeleccionados.map((p) => (
+                                                    <tr key={p.id} className="hover:bg-blue-50/50 transition-colors border-b border-gray-100">
+                                                        <td className="px-3 py-4 text-xs font-semibold">{p.producto}</td>
+                                                        <td className="px-3 py-4 text-xs text-gray-600">{p.codigo}</td>
+                                                        <td className="px-3 py-4 text-xs text-center font-bold">{p.cantidad}</td>
+                                                        <td className="px-3 py-4 text-xs text-center">{p.unidad_medida}</td>
+                                                        <td className="px-3 py-4 text-center">
+                                                            <button
+                                                                className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50 transition-colors"
+                                                                onClick={() => eliminarProducto(p.id)}
+                                                            >
+                                                                <Trash2 className="w-4 h-4" />
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                ))
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
                         </>
                     )}
