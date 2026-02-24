@@ -292,9 +292,14 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                             }
                         };
                     } else {
+                        // Si el servidor dice que hay OTRO inventario activo, el local ya no debería estar "activo"
                         return {
                             ...prev,
-                            conteosEnProceso: newCEnP
+                            conteosEnProceso: newCEnP,
+                            sesionActual: {
+                                ...prev.sesionActual,
+                                activo: false // Desactivar si el numero no coincide con el del servidor
+                            }
                         };
                     }
                 });
@@ -370,7 +375,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         try {
             const response = await apiCall('listar_proformas', 'GET');
             console.log('Respuesta de listar_proformas:', response);
-            
+
             // Si la respuesta es exitosa o si simplemente no hay proformas (lista vacía es válida)
             if (response.success || (response.proformas && Array.isArray(response.proformas))) {
                 // Mapear los datos del backend al formato esperado
@@ -386,13 +391,13 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                     archivo_pdf: pf.archivo_pdf || null,
                     total_productos: pf.total_productos || 0
                 }));
-                
+
                 if (proformasMapeadas.length > 0) {
                     console.log('Proformas mapeadas:', proformasMapeadas);
                 } else {
                     console.log('No hay proformas registradas para este inventario');
                 }
-                
+
                 setState((prev: AppState) => ({
                     ...prev,
                     proformas: proformasMapeadas
@@ -401,17 +406,17 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                 // Solo mostrar error si es un error real, no cuando simplemente no hay datos
                 const message: string = (response.message as string) || 'Error desconocido';
                 const messageLower = message.toLowerCase();
-                const isNormalCase = messageLower.includes('no se especificó inventario') || 
-                                    messageLower.includes('no hay inventario activo') ||
-                                    messageLower.includes('inventario activo');
-                
+                const isNormalCase = messageLower.includes('no se especificó inventario') ||
+                    messageLower.includes('no hay inventario activo') ||
+                    messageLower.includes('inventario activo');
+
                 if (!isNormalCase) {
                     console.error('Error en listar_proformas:', message);
                 } else {
                     // Es normal que no haya inventario activo, solo loguear sin error
                     console.log('No hay inventario activo, lista de proformas vacía');
                 }
-                
+
                 // Limpiar proformas si hay error o no hay inventario
                 setState((prev: AppState) => ({
                     ...prev,
@@ -461,7 +466,7 @@ export const useInventory = () => {
 // Helpers
 export const fmt12 = (d: Date = new Date()) => {
     // Obtener fecha/hora en zona horaria de Perú (America/Lima)
-    const peruTime = d.toLocaleString('en-US', { 
+    const peruTime = d.toLocaleString('en-US', {
         timeZone: 'America/Lima',
         year: 'numeric',
         month: '2-digit',

@@ -136,7 +136,7 @@ export default function Header({ onToggleSidebar, sidebarOpen = true }: HeaderPr
                                                 <span className={s.metodo === 'asignado' ? 'text-blue-300' : 'text-orange-300'}>|</span>
                                                 <span>Autoriza: {s.creadoPor?.split('•')[1] || s.creadoPor || '-'}</span>
                                                 <span className={s.metodo === 'asignado' ? 'text-blue-300' : 'text-orange-300'}>|</span>
-                                                <span>Inicio: {fmt12(currentTime)}</span>
+                                                <span>Inicio: {s.inicio || fmt12(new Date())}</span>
                                             </div>
                                         </div>
 
