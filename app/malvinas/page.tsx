@@ -21,10 +21,10 @@ const formatearFechaPeru = (fechaStr: string) => {
         // Solo formatear a DD/MM/YYYY HH:MM:SS
         const [datePart, timePart] = fechaStr.split(' ');
         if (!datePart || !timePart) return fechaStr;
-        
+
         const [year, month, day] = datePart.split('-');
         const [hour, minute, second] = timePart.split(':');
-        
+
         // Formatear directamente (ya viene en hora de Perú del backend)
         return `${day}/${month}/${year} ${hour}:${minute}:${second || '00'}`;
     } catch {
@@ -45,11 +45,154 @@ export default function MalvinasPage() {
     const [isAvisoOpen, setIsAvisoOpen] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [activeSessionCounts, setActiveSessionCounts] = useState<any>(null); // Datos de conteos por tienda y tipo
-    
+
     // Modal de previsualización de Excel
     const [showPreviewModal, setShowPreviewModal] = useState(false);
-    const [excelPreviewData, setExcelPreviewData] = useState<Array<{codigo: string, cantidad: any, producto?: string}>>([]);
+    const [excelPreviewData, setExcelPreviewData] = useState<Array<{ codigo: string, cantidad: any, producto?: string }>>([]);
     const [pendingExcelFile, setPendingExcelFile] = useState<File | null>(null);
+
+    // Función para guardar currentConteo en localStorage (incluyendo filas con cantidades)
+    const guardarCurrentConteo = useCallback((conteo: any) => {
+        if (conteo && typeof window !== 'undefined') {
+            // Guardar información básica + filas con sus cantidades para restauración completa
+            const datosAGuardar = {
+                conteo_id: conteo.conteo_id,
+                tipo: conteo.tipo,
+                numero: conteo.numero,
+                registrado: conteo.registrado,
+                tienda: conteo.tienda,
+                inicio: conteo.inicio,
+                // Guardar solo las filas con sus cantidades (para restauración rápida)
+                filas: conteo.filas ? conteo.filas.map((f: any) => ({
+                    codigo: f.codigo,
+                    cantidad_conteo: f.cantidad_conteo || '',
+                    unidad_medida: f.unidad_medida || 'UNIDAD',
+                    detalle_id: f.detalle_id || f.id
+                })) : []
+            };
+            localStorage.setItem('malvinas_current_conteo', JSON.stringify(datosAGuardar));
+        }
+    }, []);
+
+    // Función para limpiar currentConteo de localStorage
+    const limpiarCurrentConteo = useCallback(() => {
+        if (typeof window !== 'undefined') {
+            localStorage.removeItem('malvinas_current_conteo');
+        }
+    }, []);
+
+    // Restaurar currentConteo al cargar la página (solo si no hay uno activo)
+    useEffect(() => {
+        // Solo restaurar si no hay un currentConteo ya cargado
+        if (currentConteo) return;
+
+        const restaurarConteo = async () => {
+            if (!state.sesionActual.inventario_id || !state.sesionActual.activo) {
+                limpiarCurrentConteo();
+                return;
+            }
+
+            // Verificar si hay un conteo guardado en localStorage
+            const savedConteo = typeof window !== 'undefined'
+                ? localStorage.getItem('malvinas_current_conteo')
+                : null;
+
+            if (!savedConteo) return;
+
+            try {
+                const conteoInfo = JSON.parse(savedConteo);
+
+                // Verificar que el conteo guardado corresponde al inventario actual
+                if (conteoInfo.numero !== state.sesionActual.numero) {
+                    limpiarCurrentConteo();
+                    return;
+                }
+
+                // Verificar en el servidor si el conteo sigue en proceso
+                const response = await apiCall(`listar_conteos_malvinas&inventario_id=${state.sesionActual.inventario_id}`, 'GET');
+                if (response.success && response.tiendas) {
+                    const tipoConteoBusqueda = conteoInfo.tipo === 'cajas' ? 'por_cajas' : 'por_stand';
+                    const tiendaData = response.tiendas[conteoInfo.tienda];
+
+                    if (!tiendaData) {
+                        limpiarCurrentConteo();
+                        return;
+                    }
+
+                    const list = conteoInfo.tipo === 'cajas' ? tiendaData.conteos_por_cajas : tiendaData.conteos_por_stand;
+                    const conteoEnServidor = (list || []).find((c: any) =>
+                        c.id === conteoInfo.conteo_id &&
+                        c.estado === 'en_proceso'
+                    );
+
+                    if (conteoEnServidor) {
+                        // Cargar los detalles del conteo desde el servidor
+                        const detailRes = await apiCall(`obtener_detalle_conteo&conteo_id=${conteoInfo.conteo_id}`, 'GET');
+                        if (detailRes.success && detailRes.productos) {
+                            // Crear un mapa de las filas guardadas en localStorage (si existen)
+                            const filasGuardadasMap = new Map();
+                            if (conteoInfo.filas && Array.isArray(conteoInfo.filas)) {
+                                conteoInfo.filas.forEach((f: any) => {
+                                    if (f.codigo) {
+                                        filasGuardadasMap.set(String(f.codigo).trim().toUpperCase(), f);
+                                    }
+                                });
+                            }
+
+                            const filas = detailRes.productos.map((p: any) => {
+                                // El backend devuelve 'cantidad' que es la cantidad física guardada
+                                const cantidadGuardada = p.cantidad;
+
+                                // Buscar si hay datos guardados localmente para este producto
+                                const codigoNormalizado = String(p.codigo || '').trim().toUpperCase();
+                                const filaGuardada = filasGuardadasMap.get(codigoNormalizado);
+
+                                // Prioridad: 1) Datos guardados localmente (más recientes), 2) Datos del servidor, 3) Vacío
+                                let cantidadParaMostrar = '';
+                                if (filaGuardada && filaGuardada.cantidad_conteo && filaGuardada.cantidad_conteo !== '') {
+                                    cantidadParaMostrar = String(filaGuardada.cantidad_conteo);
+                                } else if (cantidadGuardada && Number(cantidadGuardada) > 0) {
+                                    cantidadParaMostrar = String(cantidadGuardada);
+                                }
+
+                                return {
+                                    ...p,
+                                    cantidad_conteo: cantidadParaMostrar,
+                                    unidad_medida: filaGuardada?.unidad_medida || p.unidad_medida || 'UNIDAD',
+                                    // Asegurar que tenemos el item correcto
+                                    item: p.item || p.item_producto
+                                };
+                            });
+
+                            const conteoRestaurado = {
+                                ...conteoInfo,
+                                filas: filas
+                            };
+                            setCurrentConteo(conteoRestaurado);
+                            guardarCurrentConteo(conteoRestaurado);
+                            setShowTable(true);
+                            const productosConCantidad = filas.filter((f: any) => f.cantidad_conteo !== '').length;
+                            console.log('✅ Conteo Malvinas restaurado desde servidor:', conteoInfo.conteo_id, 'en', conteoInfo.tienda, 'con', productosConCantidad, 'productos con cantidad');
+                        }
+                    } else {
+                        // El conteo ya no está en proceso, limpiar localStorage
+                        limpiarCurrentConteo();
+                    }
+                }
+            } catch (e) {
+                console.error('Error restaurando conteo Malvinas:', e);
+                limpiarCurrentConteo();
+            }
+        };
+
+        // Esperar un momento para que el estado se sincronice
+        const timer = setTimeout(() => {
+            restaurarConteo();
+        }, 1200);
+
+        return () => clearTimeout(timer);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [state.sesionActual.inventario_id, state.sesionActual.numero, state.sesionActual.activo]);
 
     const checkExistingCount = async (tipo: 'cajas' | 'stand', tienda: string) => {
         // 1. Verificar primero en el estado local (sincronizado por polling)
@@ -144,11 +287,11 @@ export default function MalvinasPage() {
                 }
 
                 setPaginationMalvinas(response.pagination);
-                
+
                 // Si es la primera carga (set vacío), solo inicializar sin marcar como nuevos
                 const esPrimeraCarga = conteosAnterioresIds.size === 0;
                 let nuevosIds = new Set<number>();
-                
+
                 if (esPrimeraCarga) {
                     // Primera carga: solo inicializar el set sin animaciones
                     const todosIds = new Set<number>();
@@ -161,14 +304,14 @@ export default function MalvinasPage() {
                         // Cargas posteriores en página 1: detectar conteos nuevos
                         nuevosIds = new Set<number>();
                         const nuevosConteos: any[] = [];
-                        
+
                         allSessions.forEach((s: any) => {
                             if (!conteosAnterioresIds.has(s.id)) {
                                 nuevosIds.add(s.id);
                                 nuevosConteos.push(s);
                             }
                         });
-                        
+
                         // Si hay conteos nuevos, agregarlos al set de nuevos conteos y mostrar notificación
                         if (nuevosIds.size > 0) {
                             setNuevosConteosIds(prev => {
@@ -176,7 +319,7 @@ export default function MalvinasPage() {
                                 nuevosIds.forEach(id => nuevoSet.add(id));
                                 return nuevoSet;
                             });
-                            
+
                             // Mostrar notificación profesional
                             if (nuevosConteos.length === 1) {
                                 const conteo = nuevosConteos[0];
@@ -192,7 +335,7 @@ export default function MalvinasPage() {
                                     'success'
                                 );
                             }
-                            
+
                             // Remover la animación después de 3 segundos
                             nuevosIds.forEach(id => {
                                 setTimeout(() => {
@@ -205,7 +348,7 @@ export default function MalvinasPage() {
                             });
                         }
                     }
-                    
+
                     // Actualizar el set global de IDs vistos (acumulativo) - siempre, sin importar la página
                     setConteosAnterioresIds(prev => {
                         const nuevoSet = new Set(prev);
@@ -213,11 +356,11 @@ export default function MalvinasPage() {
                         return nuevoSet;
                     });
                 }
-                
+
                 // El backend ya ordena por ID DESC (más reciente primero), mantener ese orden
                 // No reordenar en el frontend para preservar el orden del backend
                 const sesionesOrdenadas = allSessions;
-                
+
                 setState((prev: any) => ({
                     ...prev,
                     sesiones: { ...prev.sesiones, malvinas: sesionesOrdenadas }
@@ -408,11 +551,13 @@ export default function MalvinasPage() {
             }
         }
 
-        setCurrentConteo({
+        const nuevoConteo = {
             ...data,
             conteo_id: cid,
             filas: rowsWithIds
-        });
+        };
+        setCurrentConteo(nuevoConteo);
+        guardarCurrentConteo(nuevoConteo);
         setIsIniciarOpen(false);
         setIsAvisoOpen(true);
     };
@@ -456,7 +601,9 @@ export default function MalvinasPage() {
         const nuevasFilas = currentConteo.filas.map((f: any) =>
             f.codigo === codigo ? { ...f, cantidad_conteo: valor } : f
         );
-        setCurrentConteo({ ...currentConteo, filas: nuevasFilas });
+        const conteoActualizado = { ...currentConteo, filas: nuevasFilas };
+        setCurrentConteo(conteoActualizado);
+        guardarCurrentConteo(conteoActualizado);
     };
 
     const handleUpdateUnidad = (codigo: string, valor: string) => {
@@ -464,7 +611,9 @@ export default function MalvinasPage() {
         const nuevasFilas = currentConteo.filas.map((f: any) =>
             f.codigo === codigo ? { ...f, unidad_medida: valor } : f
         );
-        setCurrentConteo({ ...currentConteo, filas: nuevasFilas });
+        const conteoActualizado = { ...currentConteo, filas: nuevasFilas };
+        setCurrentConteo(conteoActualizado);
+        guardarCurrentConteo(conteoActualizado);
     };
 
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -480,10 +629,10 @@ export default function MalvinasPage() {
                 const wb = XLSX.read(bstr, { type: 'binary' });
                 const wsname = wb.SheetNames[0];
                 const ws = wb.Sheets[wsname];
-                
+
                 // Leer como array de arrays para acceder por posición de columna
                 const dataArray = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) as any[][];
-                
+
                 if (dataArray.length === 0) {
                     showAlert('Error', 'El archivo Excel está vacío.', 'error');
                     return;
@@ -493,7 +642,7 @@ export default function MalvinasPage() {
                 let codigoColIndex = 1;
                 let cantidadColIndex = 13;
                 let nombreColIndex = 0; // Columna A para nombre del producto
-                
+
                 const headerRow = dataArray[0] || [];
                 let foundCodigoByPosition = false;
                 let foundCantidadByPosition = false;
@@ -537,17 +686,17 @@ export default function MalvinasPage() {
                 }
 
                 // Extraer datos para previsualización
-                const previewData: Array<{codigo: string, cantidad: any, producto?: string}> = [];
+                const previewData: Array<{ codigo: string, cantidad: any, producto?: string }> = [];
                 const startRow = headerRow.some((h: any) => String(h || '').toLowerCase().includes('codigo') || String(h || '').toLowerCase().includes('cantidad')) ? 1 : 0;
-                
+
                 for (let i = startRow; i < dataArray.length; i++) {
                     const row = dataArray[i];
                     if (!row || row.length === 0) continue;
-                    
+
                     const codigo = String(row[codigoColIndex] || '').trim().toUpperCase();
                     const cantidad = row[cantidadColIndex];
                     const producto = row[nombreColIndex] ? String(row[nombreColIndex]).trim() : undefined;
-                    
+
                     if (codigo && cantidad !== undefined && cantidad !== null && cantidad !== '') {
                         previewData.push({ codigo, cantidad, producto });
                     }
@@ -585,7 +734,7 @@ export default function MalvinasPage() {
         const newFilas = currentConteo.filas.map((fila: any) => {
             const codigoNormalizado = String(fila.codigo || '').trim().toUpperCase();
             const cantidadExcel = excelMap.get(codigoNormalizado);
-            
+
             if (cantidadExcel !== undefined && cantidadExcel !== null && cantidadExcel !== '') {
                 updatedCount++;
                 return { ...fila, cantidad_conteo: String(cantidadExcel) };
@@ -594,7 +743,9 @@ export default function MalvinasPage() {
         });
 
         if (updatedCount > 0) {
-            setCurrentConteo({ ...currentConteo, filas: newFilas });
+            const conteoActualizado = { ...currentConteo, filas: newFilas };
+            setCurrentConteo(conteoActualizado);
+            guardarCurrentConteo(conteoActualizado);
             setShowTable(true);
             showAlert('Carga Exitosa', `Se actualizaron ${updatedCount} productos desde el archivo.`, 'success');
         } else {
@@ -686,6 +837,7 @@ export default function MalvinasPage() {
 
 
             setCurrentConteo(null);
+            limpiarCurrentConteo();
             setShowTable(false);
             // cargarSesionesAPI(); // Se comenta para mantener el update optimista
         } catch (e) {
@@ -1105,14 +1257,13 @@ export default function MalvinasPage() {
                                     ) : (
                                         state.sesiones.malvinas.map((s: any, idx: number) => {
                                             const esNuevo = nuevosConteosIds.has(s.id);
-                                            
+
                                             return (
                                                 <tr
                                                     key={s.id}
-                                                    className={`border-b border-gray-100 hover:opacity-90 ${
-                                                        esNuevo ? 'animate-pulse-new' : ''
-                                                    }`}
-                                                    style={{ 
+                                                    className={`border-b border-gray-100 hover:opacity-90 ${esNuevo ? 'animate-pulse-new' : ''
+                                                        }`}
+                                                    style={{
                                                         backgroundColor: esNuevo ? `rgba(11, 59, 140, 0.08)` : 'white'
                                                     }}
                                                 >
@@ -1139,7 +1290,7 @@ export default function MalvinasPage() {
                                 </tbody>
                             </table>
                         </div>
-                        
+
                         {/* Paginación */}
                         {paginationMalvinas && (
                             <div className="bg-gradient-to-r from-gray-50 to-gray-100 px-4 py-3 flex items-center justify-between border-t border-gray-200">
