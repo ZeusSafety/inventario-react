@@ -39,8 +39,7 @@ interface ComparacionItem {
     cantidad_sistema: number;
     cantidad_fisica: number;
     resultado: number;
-    estado: 'CONFORME' | 'SOBRANTE' | 'FALTANTE' | 'SISTEMA';
-
+    estado: 'CONFORME' | 'SOBRANTE' | 'FALTANTE' | 'SISTEMA' | 'ERROR_SISTEMA' | 'ERROR_LOGISTICA' | 'NUEVO_CONTEO_REQUERIDO';
     unidad_medida: string;
 }
 
@@ -477,12 +476,22 @@ export default function CompararPage() {
     const handleSubmitVerification = async () => {
         if (!selectedItem || !selectedAlmacen) return;
 
+        // Limpiar campos de texto vacíos para que viajen como null al backend
+        // Esto evita errores 1292 en MySQL de "Incorrect date value: ''"
+        const cleanedVerificacion = { ...verificacionForm };
+        Object.keys(cleanedVerificacion).forEach(key => {
+            const val = cleanedVerificacion[key as keyof typeof cleanedVerificacion];
+            if (val === '') {
+                // @ts-ignore
+                cleanedVerificacion[key] = null;
+            }
+        });
+
         const payload = {
             comparacion_id: selectedItem.id,
             inventario_id: state.sesionActual.inventario_id,
             almacen: selectedAlmacen,
-            ...verificacionForm,
-            registrado_por: verificacionForm.registrado_por // Use from state
+            ...cleanedVerificacion
         };
 
         // Validation
@@ -931,9 +940,16 @@ export default function CompararPage() {
                                                             <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider border shadow-sm ${item.estado === 'CONFORME' ? 'bg-green-50 text-green-700 border-green-200' :
                                                                 item.estado === 'FALTANTE' ? 'bg-red-50 text-red-700 border-red-200' :
                                                                     item.estado === 'SISTEMA' ? 'bg-blue-50 text-blue-700 border-blue-200' :
-                                                                        'bg-yellow-50 text-yellow-700 border-yellow-200'
+                                                                        item.estado === 'ERROR_SISTEMA' ? 'bg-amber-100 text-amber-700 border-amber-300' :
+                                                                            item.estado === 'ERROR_LOGISTICA' ? 'bg-red-100 text-red-700 border-red-300' :
+                                                                                item.estado === 'NUEVO_CONTEO_REQUERIDO' ? 'bg-indigo-100 text-indigo-700 border-indigo-300' :
+                                                                                    'bg-yellow-50 text-yellow-700 border-yellow-200'
                                                                 }`}>
-                                                                {item.estado === 'SISTEMA' ? 'SIN CONTEO' : item.estado}
+                                                                {item.estado === 'SISTEMA' ? 'SIN CONTEO' :
+                                                                    item.estado === 'ERROR_SISTEMA' ? 'Error Sistema' :
+                                                                        item.estado === 'ERROR_LOGISTICA' ? 'Error Logística' :
+                                                                            item.estado === 'NUEVO_CONTEO_REQUERIDO' ? 'Recount' :
+                                                                                item.estado}
                                                             </span>
                                                         </td>
                                                         <td className="px-3 py-2 text-center relative sticky right-0 bg-white/90 backdrop-blur-sm z-10 shadow-[-4px_0_10px_-4px_rgba(0,0,0,0.1)]">

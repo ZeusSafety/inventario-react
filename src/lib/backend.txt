@@ -3072,12 +3072,23 @@ def obtener_comparacion_callao(inventario_id):
                 cc.cantidad_fisica as cant_fisica_db,
                 cc.resultado as resultado_db,
                 cc.estado as estado_db,
+                v.estado_verificacion,
                 ds.unidad_medida,
                 DATE_FORMAT(cc.fecha_comparacion, '%%d/%%m/%%Y %%H:%%i') as fecha_comparacion,
                 pi.unidad_medida as unidad_catalogo
             FROM datos_sistema_callao ds
             LEFT JOIN comparaciones_callao cc ON ds.inventario_id = cc.inventario_id AND ds.codigo = cc.codigo
             LEFT JOIN productos_inventario pi ON ds.producto_item = pi.item
+            LEFT JOIN (
+                SELECT v1.comparacion_id, v1.estado_verificacion
+                FROM verificaciones v1
+                INNER JOIN (
+                    SELECT MAX(id) as max_id 
+                    FROM verificaciones 
+                    WHERE almacen = 'callao' 
+                    GROUP BY comparacion_id
+                ) v2 ON v1.id = v2.max_id
+            ) v ON cc.id = v.comparacion_id
             WHERE ds.inventario_id = %s AND ds.estado IN ('activo', 'ACTIVO', 'modificado', 'MODIFICADO')
             ORDER BY ds.producto
         """, (inventario_id,))
@@ -3143,7 +3154,7 @@ def obtener_comparacion_callao(inventario_id):
                 'cantidad_sistema': int(cant_sistema),
                 'cantidad_fisica': int(cant_fisica) if tiene_conteo else 0,
                 'resultado': int(diferencia) if tiene_conteo else 0,
-                'estado': estado,
+                'estado': item.get('estado_verificacion') or estado,
                 'unidad_medida': item['unidad_medida'] or 'UND',
                 'fecha_comparacion': item['fecha_comparacion']
             })
@@ -3281,12 +3292,23 @@ def obtener_comparacion_malvinas(inventario_id):
                 cc.cantidad_fisica as cant_fisica_db,
                 cc.resultado as resultado_db,
                 cc.estado as estado_db,
+                v.estado_verificacion,
                 ds.unidad_medida,
                 DATE_FORMAT(cc.fecha_comparacion, '%%d/%%m/%%Y %%H:%%i') as fecha_comparacion,
                 pi.unidad_medida as unidad_catalogo
             FROM datos_sistema_malvinas ds
             LEFT JOIN comparaciones_malvinas cc ON ds.inventario_id = cc.inventario_id AND ds.codigo = cc.codigo
             LEFT JOIN productos_inventario pi ON ds.producto_item = pi.item
+            LEFT JOIN (
+                SELECT v1.comparacion_id, v1.estado_verificacion
+                FROM verificaciones v1
+                INNER JOIN (
+                    SELECT MAX(id) as max_id 
+                    FROM verificaciones 
+                    WHERE almacen = 'malvinas' 
+                    GROUP BY comparacion_id
+                ) v2 ON v1.id = v2.max_id
+            ) v ON cc.id = v.comparacion_id
             WHERE ds.inventario_id = %s AND ds.estado IN ('activo', 'ACTIVO', 'modificado', 'MODIFICADO')
             ORDER BY ds.producto
         """, (inventario_id,))
@@ -3352,7 +3374,7 @@ def obtener_comparacion_malvinas(inventario_id):
                 'cantidad_sistema': int(cant_sistema),
                 'cantidad_fisica': int(cant_fisica) if tiene_conteo else 0,
                 'resultado': int(diferencia) if tiene_conteo else 0,
-                'estado': estado,
+                'estado': item.get('estado_verificacion') or estado,
                 'unidad_medida': item['unidad_medida'] or 'UND',
                 'fecha_comparacion': item['fecha_comparacion']
             })
@@ -3893,6 +3915,11 @@ def registrar_verificacion(data):
     Si la comparación no existe, la crea primero desde datos_sistema
     """
     try:
+        # Sanitizar datos: convertir strings vacíos a None para evitar errores de fecha en MySQL
+        for key in list(data.keys()):
+            if data[key] == "":
+                data[key] = None
+
         conn = get_connection()
         cursor = conn.cursor()
         
@@ -4058,15 +4085,15 @@ def registrar_verificacion(data):
             mensaje_estado = 'Todos los valores coinciden correctamente'
         elif coincide_existencia_fisico and not coincide_existencia_sistema:
             # Caso 1: Existencia = Físico, pero Sistema es diferente
-            estado_verificacion = 'ERROR DE SISTEMA'
+            estado_verificacion = 'ERROR_SISTEMA'
             mensaje_estado = f'El sistema está mal. Stock existencia ({stock_existencia}) coincide con físico ({stock_fisico}) pero no con sistema ({stock_sistema})'
         elif coincide_existencia_sistema and not coincide_existencia_fisico:
             # Caso 2: Existencia = Sistema, pero Físico es diferente
-            estado_verificacion = 'ERROR DE LOGÍSTICA'
+            estado_verificacion = 'ERROR_LOGISTICA'
             mensaje_estado = f'Error de logística. Stock existencia ({stock_existencia}) coincide con sistema ({stock_sistema}) pero no con físico ({stock_fisico})'
         else:
             # Caso 3: Existencia no coincide ni con físico ni con sistema
-            estado_verificacion = 'REALIZAR NUEVO CONTEO'
+            estado_verificacion = 'NUEVO_CONTEO_REQUERIDO'
             mensaje_estado = f'Se requiere nuevo conteo. Stock existencia ({stock_existencia}) no coincide ni con físico ({stock_fisico}) ni con sistema ({stock_sistema})'
         
         # Insertar verificación
@@ -4173,8 +4200,8 @@ def registrar_verificacion(data):
             })
         ))
 
-        # ACTUALIZAR TABLA DE COMPARACIONES PARA QUE PERSISTA EL ESTADO EN LA VISTA PRINCIPAL
-        cursor.execute(f"UPDATE {tabla_comparacion} SET estado = %s WHERE id = %s", (estado_verificacion, data['comparacion_id']))
+        # No actualizamos la tabla de comparacin directamente porque no tiene la columna estado_verificacion
+        # La vista principal obtendr el estado haciendo un JOIN con la tabla de verificaciones
         
         conn.commit()
         

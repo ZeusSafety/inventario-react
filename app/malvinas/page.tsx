@@ -11,6 +11,8 @@ import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 
 const TIENDAS = ['TIENDA 3006', 'TIENDA 3006 B', 'TIENDA 3131', 'TIENDA 3133', 'TIENDA 412-A'];
+const TIENDAS_CAJAS = TIENDAS.filter(t => t !== 'TIENDA 3006 B');
+const TIENDAS_STAND = TIENDAS.filter(t => t !== 'TIENDA 3006');
 
 // Función helper para formatear fechas a hora de Perú
 const formatearFechaPeru = (fechaStr: string) => {
@@ -400,12 +402,15 @@ export default function MalvinasPage() {
     const invNumNorm = (invNum || '').trim().toUpperCase();
     const sesionesMalvinas = state.sesiones.malvinas || [];
 
-    // Lógica Global de Malvinas: Se considera que una tienda está 'totalmente terminada' si tiene AMBOS conteos (Cajas y Stand)
+    // Lógica Global de Malvinas: Se considera que una tienda está 'totalmente terminada' si cumple sus requisitos específicos (Cajas y/o Stand)
     const tiendasTotalmenteTerminadas = TIENDAS.filter(t => {
-        const hasCajas = sesionesMalvinas.some((s: any) => (s.numero || '').trim().toUpperCase() === invNumNorm && s.tienda === t && s.tipo === 'cajas') ||
+        const needsCajas = TIENDAS_CAJAS.includes(t);
+        const needsStand = TIENDAS_STAND.includes(t);
+
+        const hasCajas = !needsCajas || sesionesMalvinas.some((s: any) => (s.numero || '').trim().toUpperCase() === invNumNorm && s.tienda === t && s.tipo === 'cajas') ||
             activeSessionCounts?.[t]?.conteos_por_cajas?.some((c: any) => c.estado === 'finalizado');
 
-        const hasStand = sesionesMalvinas.some((s: any) => (s.numero || '').trim().toUpperCase() === invNumNorm && s.tienda === t && s.tipo === 'stand') ||
+        const hasStand = !needsStand || sesionesMalvinas.some((s: any) => (s.numero || '').trim().toUpperCase() === invNumNorm && s.tienda === t && s.tipo === 'stand') ||
             activeSessionCounts?.[t]?.conteos_por_stand?.some((c: any) => c.estado === 'finalizado');
 
         return hasCajas && hasStand;
@@ -415,21 +420,21 @@ export default function MalvinasPage() {
     const todoCompletado = totalContadas === TIENDAS.length && TIENDAS.length > 0;
 
     // Conteo específico por tipo para los botones del header
-    const tiendasCajasHechas = TIENDAS.filter(t => {
+    const tiendasCajasHechas = TIENDAS_CAJAS.filter(t => {
         const enHistorial = sesionesMalvinas.some((s: any) => (s.numero || '').trim().toUpperCase() === invNumNorm && s.tienda === t && s.tipo === 'cajas');
         const enActivo = activeSessionCounts?.[t]?.conteos_por_cajas?.some((c: any) => c.estado === 'finalizado');
         return enHistorial || enActivo;
     });
 
-    const tiendasStandHechas = TIENDAS.filter(t => {
+    const tiendasStandHechas = TIENDAS_STAND.filter(t => {
         const enHistorial = sesionesMalvinas.some((s: any) => (s.numero || '').trim().toUpperCase() === invNumNorm && s.tienda === t && s.tipo === 'stand');
         const enActivo = activeSessionCounts?.[t]?.conteos_por_stand?.some((c: any) => c.estado === 'finalizado');
         return enHistorial || enActivo;
     });
 
     // Los botones se mostrarán verdes si todas sus tiendas respectivas están cubiertas
-    const cajasCompletadoGlobal = tiendasCajasHechas.length === TIENDAS.length && TIENDAS.length > 0;
-    const standCompletadoGlobal = tiendasStandHechas.length === TIENDAS.length && TIENDAS.length > 0;
+    const cajasCompletadoGlobal = tiendasCajasHechas.length === TIENDAS_CAJAS.length && TIENDAS_CAJAS.length > 0;
+    const standCompletadoGlobal = tiendasStandHechas.length === TIENDAS_STAND.length && TIENDAS_STAND.length > 0;
 
     // Indicadores de proceso: Solo mostrar cargando si hay algo en proceso QUE NO ESTÉ YA TERMINADO (POR TIPO)
     const cajasEnProcesoHeader = state.conteosEnProceso?.some((c: any) =>
@@ -849,30 +854,31 @@ export default function MalvinasPage() {
     };
 
     const getTiendaStatus = (tienda: string) => {
+        const needsCajas = TIENDAS_CAJAS.includes(tienda);
+        const needsStand = TIENDAS_STAND.includes(tienda);
+
         // 1. Verificar si AMBOS están completados (Cajas y Stand)
-        const hasCajas = (state.sesiones.malvinas || []).some((s: any) =>
+        const hasCajas = !needsCajas || (state.sesiones.malvinas || []).some((s: any) =>
             s.tienda === tienda && s.numero === state.sesionActual.numero && s.tipo === 'cajas' && s.fin
         ) || activeSessionCounts?.[tienda]?.conteos_por_cajas?.some((c: any) => c.estado === 'finalizado');
 
-        const hasStand = (state.sesiones.malvinas || []).some((s: any) =>
+        const hasStand = !needsStand || (state.sesiones.malvinas || []).some((s: any) =>
             s.tienda === tienda && s.numero === state.sesionActual.numero && s.tipo === 'stand' && s.fin
         ) || activeSessionCounts?.[tienda]?.conteos_por_stand?.some((c: any) => c.estado === 'finalizado');
 
         if (hasCajas && hasStand) return 'listo';
 
         // Si al menos uno está listo o en proceso, podríamos considerarlo "en_proceso" para la visualización global
-        if (hasCajas || hasStand) {
-            // Pero comprobamos si el que falta está realmente en proceso
-            return 'en_proceso';
-        }
-
-        // 3. Verificar si está en proceso por alguien más (vía conteosEnProceso)
         const enProceso = state.conteosEnProceso?.some((c: any) =>
             c.tienda_nombre === tienda &&
             c.almacen_nombre === 'Malvinas' &&
             c.estado === 'en_proceso'
         );
-        if (enProceso) return 'en_proceso';
+
+        // Si alguno está hecho o en proceso
+        if ((needsCajas && hasCajas) || (needsStand && hasStand) || enProceso) {
+            return 'en_proceso';
+        }
 
         return 'pendiente';
     };
@@ -1020,7 +1026,7 @@ export default function MalvinasPage() {
                                 disabled={cajasCompletadoGlobal}
                             >
                                 {cajasCompletadoGlobal ? <ShieldCheck className="w-4 h-4" /> : cajasEnProcesoHeader ? <Loader2 className="w-4 h-4 animate-spin" /> : <Box className="w-4 h-4" />}
-                                <span>{cajasCompletadoGlobal ? 'Cajas: Completado' : `Conteo por Cajas ${tiendasCajasHechas.length}/${TIENDAS.length}`}</span>
+                                <span>{cajasCompletadoGlobal ? 'Cajas: Completado' : `Conteo por Cajas ${tiendasCajasHechas.length}/${TIENDAS_CAJAS.length}`}</span>
                             </button>
                             <button
                                 onClick={() => {
@@ -1037,7 +1043,7 @@ export default function MalvinasPage() {
                                 disabled={standCompletadoGlobal}
                             >
                                 {standCompletadoGlobal ? <ShieldCheck className="w-4 h-4" /> : standEnProcesoHeader ? <Loader2 className="w-4 h-4 animate-spin" /> : <Columns className="w-4 h-4" />}
-                                <span>{standCompletadoGlobal ? 'Stand: Completado' : `Conteo de Stand ${tiendasStandHechas.length}/${TIENDAS.length}`}</span>
+                                <span>{standCompletadoGlobal ? 'Stand: Completado' : `Conteo de Stand ${tiendasStandHechas.length}/${TIENDAS_STAND.length}`}</span>
                             </button>
                         </div>
                     </header>
