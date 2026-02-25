@@ -3033,6 +3033,10 @@ def obtener_comparacion_callao(inventario_id):
         if not almacen_id:
             return {'success': False, 'message': 'No se encontró el almacén Callao'}
         
+        # 1.5 Obtener IDs de productos con edición manual de física
+        cursor.execute("SELECT DISTINCT comparacion_id FROM ediciones_cantidad_fisica WHERE inventario_id = %s AND almacen = 'callao'", (inventario_id,))
+        fisicos_editados = {row['comparacion_id'] for row in cursor.fetchall()}
+        
         # 2. OBTENER SUMATORIA REAL DE CONTEOS FÍSICOS (SIEMPRE)
         cursor.execute("""
             SELECT 
@@ -3097,11 +3101,17 @@ def obtener_comparacion_callao(inventario_id):
             cant_fisica = 0.0
             tiene_conteo = False
             
-            if cant_fisica_db is not None:
-                cant_fisica = float(cant_fisica_db)
+            if item['comparacion_id'] in fisicos_editados:
+                # Si fue editado manualmente, confiamos en la tabla de comparación
+                cant_fisica = float(cant_fisica_db) if cant_fisica_db is not None else 0.0
                 tiene_conteo = True
             elif cant_fisica_raw is not None:
+                # Si no fue editado, usamos los conteos en vivo (Prioridad 1)
                 cant_fisica = float(cant_fisica_raw)
+                tiene_conteo = True
+            elif cant_fisica_db is not None:
+                # Si no hay conteos en vivo pero sí valor en comparación (snapshot)
+                cant_fisica = float(cant_fisica_db)
                 tiene_conteo = True
             
             diferencia = cant_fisica - cant_sistema
@@ -3232,6 +3242,10 @@ def obtener_comparacion_malvinas(inventario_id):
         
         if not almacen_id:
             return {'success': False, 'message': 'No se encontró el almacén Malvinas'}
+            
+        # 1.5 Obtener IDs de productos con edición manual de física
+        cursor.execute("SELECT DISTINCT comparacion_id FROM ediciones_cantidad_fisica WHERE inventario_id = %s AND almacen = 'malvinas'", (inventario_id,))
+        fisicos_editados = {row['comparacion_id'] for row in cursor.fetchall()}
         
         # 2. OBTENER SUMATORIA REAL DE CONTEOS FÍSICOS (SIEMPRE)
         cursor.execute("""
@@ -3296,11 +3310,17 @@ def obtener_comparacion_malvinas(inventario_id):
             cant_fisica = 0.0
             tiene_conteo = False
             
-            if cant_fisica_db is not None:
-                cant_fisica = float(cant_fisica_db)
+            if item['comparacion_id'] in fisicos_editados:
+                # Si fue editado manualmente, confiamos en la tabla de comparación
+                cant_fisica = float(cant_fisica_db) if cant_fisica_db is not None else 0.0
                 tiene_conteo = True
             elif cant_fisica_raw is not None:
+                # Si no fue editado, usamos los conteos en vivo (Prioridad 1)
                 cant_fisica = float(cant_fisica_raw)
+                tiene_conteo = True
+            elif cant_fisica_db is not None:
+                # Si no hay conteos en vivo pero sí valor en comparación (snapshot)
+                cant_fisica = float(cant_fisica_db)
                 tiene_conteo = True
             
             diferencia = cant_fisica - cant_sistema
@@ -4758,6 +4778,10 @@ def obtener_consolidado_callao(inventario_id=None, forzar_regenerar=False):
             
             if not almacen_id:
                 return {'success': False, 'message': 'No se encontró el almacén Callao', 'consolidado': []}
+                
+            # 1.5 Obtener IDs de productos con edición manual de física
+            cursor.execute("SELECT DISTINCT comparacion_id FROM ediciones_cantidad_fisica WHERE inventario_id = %s AND almacen = 'callao'", (inventario_id,))
+            fisicos_editados = {row['comparacion_id'] for row in cursor.fetchall()}
             
             # 2. OBTENER SUMATORIA REAL DE CONTEOS FÍSICOS (desde detalle_conteo)
             cursor.execute("""
@@ -4790,7 +4814,7 @@ def obtener_consolidado_callao(inventario_id=None, forzar_regenerar=False):
                     ds.producto_item as item,
                     ds.producto,
                     ds.codigo,
-                    ds.cantidad_sistema,
+                    COALESCE(cc.cantidad_sistema, ds.cantidad_sistema) as cantidad_sistema,
                     cc.cantidad_fisica as cant_fisica_db,
                     ds.unidad_medida
                 FROM datos_sistema_callao ds
@@ -4825,11 +4849,17 @@ def obtener_consolidado_callao(inventario_id=None, forzar_regenerar=False):
                 cant_fisica = 0.0
                 tiene_conteo = False
                 
-                if cant_fisica_db is not None:
-                    cant_fisica = float(cant_fisica_db)
+                if prod_sistema['comparacion_id'] in fisicos_editados:
+                    # Si fue editado manualmente, confiamos en la tabla de comparación
+                    cant_fisica = float(cant_fisica_db) if cant_fisica_db is not None else 0.0
                     tiene_conteo = True
                 elif cant_fisica_raw is not None:
+                    # Si no fue editado, usamos los conteos en vivo
                     cant_fisica = float(cant_fisica_raw)
+                    tiene_conteo = True
+                elif cant_fisica_db is not None:
+                    # Si no hay conteos en vivo pero sí valor en comparación
+                    cant_fisica = float(cant_fisica_db)
                     tiene_conteo = True
                 
                 diferencia = cant_fisica - sistema
@@ -5208,6 +5238,10 @@ def obtener_consolidado_malvinas(inventario_id=None, forzar_regenerar=False):
             
             if not almacen_id:
                 return {'success': False, 'message': 'No se encontró el almacén Malvinas', 'consolidado': []}
+                
+            # 1.5 Obtener IDs de productos con edición manual de física
+            cursor.execute("SELECT DISTINCT comparacion_id FROM ediciones_cantidad_fisica WHERE inventario_id = %s AND almacen = 'malvinas'", (inventario_id,))
+            fisicos_editados = {row['comparacion_id'] for row in cursor.fetchall()}
             
             # 2. OBTENER SUMATORIA REAL DE CONTEOS FÍSICOS (desde detalle_conteo)
             cursor.execute("""
@@ -5240,7 +5274,7 @@ def obtener_consolidado_malvinas(inventario_id=None, forzar_regenerar=False):
                     ds.producto_item as item,
                     ds.producto,
                     ds.codigo,
-                    ds.cantidad_sistema,
+                    COALESCE(cc.cantidad_sistema, ds.cantidad_sistema) as cantidad_sistema,
                     cc.cantidad_fisica as cant_fisica_db,
                     ds.unidad_medida
                 FROM datos_sistema_malvinas ds
@@ -5275,11 +5309,17 @@ def obtener_consolidado_malvinas(inventario_id=None, forzar_regenerar=False):
                 cant_fisica = 0.0
                 tiene_conteo = False
                 
-                if cant_fisica_db is not None:
-                    cant_fisica = float(cant_fisica_db)
+                if prod_sistema['comparacion_id'] in fisicos_editados:
+                    # Si fue editado manualmente, confiamos en la tabla de comparación
+                    cant_fisica = float(cant_fisica_db) if cant_fisica_db is not None else 0.0
                     tiene_conteo = True
                 elif cant_fisica_raw is not None:
+                    # Si no fue editado, usamos los conteos en vivo
                     cant_fisica = float(cant_fisica_raw)
+                    tiene_conteo = True
+                elif cant_fisica_db is not None:
+                    # Si no hay conteos en vivo pero sí valor en comparación
+                    cant_fisica = float(cant_fisica_db)
                     tiene_conteo = True
                 
                 diferencia = cant_fisica - sistema
