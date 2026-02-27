@@ -3,59 +3,62 @@
 import React, { useState, useEffect } from 'react';
 import { useInventory } from '@/context/InventoryContext';
 import { apiCall, API_BASE_URL } from '@/lib/api';
-import { Receipt, PlusCircle, FileText } from 'lucide-react';
+import { Receipt, PlusCircle, FileText, Eye } from 'lucide-react';
 import NuevoProformaModal from '@/components/modals/NuevoProformaModal';
+import Modal from '@/components/Modal';
 
 export default function ProformasPage() {
-    const { state, setState, loadProformas, showAlert, showConfirm } = useInventory();
+    const { state, loadProformas, showAlert, showConfirm } = useInventory();
     const [loading, setLoading] = useState(true);
     const [isModalOpen, setIsModalOpen] = useState(false);
+    const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+    const [selectedProforma, setSelectedProforma] = useState<any>(null);
     const [currentPage, setCurrentPage] = useState(1);
     const itemsPerPage = 10;
-
-    const cargarProductosAPI = React.useCallback(async (conteoId = 1) => {
-        try {
-            const response = await apiCall(`obtener_detalle_conteo&conteo_id=${conteoId}`, 'GET');
-            if (response.success && response.productos) {
-                const productos = (response.productos as any[]).map((p, i) => ({
-                    item: p.item_producto || (i + 1),
-                    producto: p.producto || '',
-                    codigo: String(p.codigo || ''),
-                    unidad_medida: p.unidad_medida || 'UNIDAD',
-                    cantidad_sistema: Number(p.cantidad || 0),
-                    detalle_id: p.id
-                }));
-                setState(prev => ({ ...prev, productos }));
-            }
-        } catch (error) {
-            console.error('Error al cargar productos:', error);
-        }
-    }, [setState]);
 
     useEffect(() => {
         const init = async () => {
             setLoading(true);
             await loadProformas();
-            if (state.productos.length === 0) {
-                await cargarProductosAPI();
-            }
             setLoading(false);
         };
         init();
-    }, [loadProformas, state.productos.length, cargarProductosAPI]);
+    }, [loadProformas]);
 
-    const emitirProforma = async (id: string | number) => {
+    const verDetalleProforma = async (id: string | number) => {
+        try {
+            const response = await apiCall(`obtener_detalle_proforma&proforma_id=${id}`, 'GET');
+            if (response.success) {
+                setSelectedProforma(response);
+                setIsDetailModalOpen(true);
+            } else {
+                showAlert('Error', response.message || 'Error al obtener detalle de proforma', 'error');
+            }
+        } catch (e) {
+            console.error(e);
+            showAlert('Error', 'Error de conexión con el servidor', 'error');
+        }
+    };
+
+    const actualizarEstadoProforma = async (id: string | number, nuevoEstado: string) => {
         showConfirm(
-            '¿Emitir Proforma?',
-            '¿Desea emitir esta proforma? Esta acción no se puede deshacer.',
+            `¿Actualizar estado a "${nuevoEstado}"?`,
+            'Esta acción actualizará el estado de la proforma.',
             async () => {
                 try {
-                    const response = await apiCall(`emitir_proforma&id=${id}`, 'POST');
+                    const response = await apiCall('actualizar_estado_proforma', 'POST', {
+                        proforma_id: id,
+                        estado: nuevoEstado,
+                        observaciones: ''
+                    });
                     if (response.success) {
-                        showAlert('¡Emitida!', 'Proforma emitida correctamente.', 'success');
+                        showAlert('¡Actualizado!', response.message || 'Estado actualizado correctamente.', 'success');
                         await loadProformas();
+                        if (isDetailModalOpen) {
+                            setIsDetailModalOpen(false);
+                        }
                     } else {
-                        showAlert('Error', response.message || 'Error al emitir proforma', 'error');
+                        showAlert('Error', response.message || 'Error al actualizar estado', 'error');
                     }
                 } catch (e) {
                     console.error(e);
@@ -65,8 +68,13 @@ export default function ProformasPage() {
         );
     };
 
-    const descargarProformaPDF = (id: string | number) => {
-        window.open(`${API_BASE_URL}/?action=descargar_proforma_pdf&id=${id}`, '_blank');
+    const descargarProformaPDF = (archivoPdf: string | null) => {
+        if (!archivoPdf) {
+            showAlert('Información', 'El PDF aún no está disponible.', 'warning');
+            return;
+        }
+        // Las URLs de Google Cloud Storage son públicas y se pueden abrir directamente
+        window.open(archivoPdf, '_blank');
     };
 
     // Pagination logic
@@ -87,10 +95,10 @@ export default function ProformasPage() {
                                 </div>
                                 <div>
                                     <h1 className="font-bold text-gray-900 m-0" style={{ fontFamily: 'var(--font-poppins)', fontSize: '22px' }}>
-                                        Simulación de Proformas
+                                        Proformas
                                     </h1>
                                     <p className="text-sm text-gray-600 mt-1" style={{ fontFamily: 'var(--font-poppins)' }}>
-                                        Gestión y consulta de proformas simuladas para control de inventario preventivo
+                                        Gestión y consulta de proformas para control de inventario
                                     </p>
                                 </div>
                             </div>
@@ -117,6 +125,7 @@ export default function ProformasPage() {
                                             <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-white whitespace-nowrap">REGISTRADO POR</th>
                                             <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-white whitespace-nowrap">ALMACÉN</th>
                                             <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-white whitespace-nowrap">N° PROFORMA</th>
+                                            <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-white whitespace-nowrap">ESTADO</th>
                                             <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-white whitespace-nowrap">ARCHIVO</th>
                                             <th className="px-3 py-3 text-center text-[10px] font-bold uppercase tracking-wider text-white whitespace-nowrap">ACCIÓN</th>
                                         </tr>
@@ -124,7 +133,7 @@ export default function ProformasPage() {
                                     <tbody className="divide-y divide-gray-100">
                                         {loading ? (
                                             <tr>
-                                                <td colSpan={8} className="px-3 py-8 text-center text-sm text-gray-600">
+                                                <td colSpan={9} className="px-3 py-8 text-center text-sm text-gray-600">
                                                     <div className="flex items-center justify-center space-x-2">
                                                         <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-700"></div>
                                                         <span>Cargando datos...</span>
@@ -133,35 +142,53 @@ export default function ProformasPage() {
                                             </tr>
                                         ) : currentItems.length === 0 ? (
                                             <tr>
-                                                <td colSpan={8} className="px-3 py-12 text-center text-sm text-gray-500 font-medium italic">
+                                                <td colSpan={9} className="px-3 py-12 text-center text-sm text-gray-500 font-medium italic">
                                                     No hay registros aún
                                                 </td>
                                             </tr>
                                         ) : (
                                             currentItems.map((pf, idx) => (
-                                                <tr key={pf.id} className="hover:bg-blue-50/50 transition-colors border-b border-gray-100">
-                                                    <td className="px-3 py-4 text-xs font-medium text-gray-900 uppercase">{indexOfFirstItem + idx + 1}</td>
-                                                    <td className="px-3 py-4 text-xs text-gray-600 uppercase">{pf.fecha}</td>
-                                                    <td className="px-3 py-4 text-xs text-gray-600 uppercase">{pf.asesor}</td>
-                                                    <td className="px-3 py-4 text-xs text-gray-600 uppercase">{pf.registrado}</td>
-                                                    <td className="px-3 py-4 text-xs text-gray-600 uppercase font-bold text-[#0B3B8C]">{pf.almacen}</td>
-                                                    <td className="px-3 py-4 text-xs text-gray-900 font-bold uppercase">{pf.num}</td>
-                                                    <td className="px-3 py-4 text-xs text-gray-600">
-                                                        <button
-                                                            onClick={() => descargarProformaPDF(pf.id)}
-                                                            className="inline-flex items-center space-x-1 px-2.5 py-1 bg-gradient-to-br from-red-500 to-red-600 text-white rounded-lg text-[10px] font-bold hover:opacity-90 transition-all duration-200 shadow-sm"
-                                                        >
-                                                            <FileText className="w-3 h-3" />
-                                                            <span>PDF</span>
-                                                        </button>
+                                                <tr key={pf.id} className="hover:bg-blue-50/50 transition-colors border-b border-gray-100 h-[45px]">
+                                                    <td className="px-3 py-3 text-[10px] font-medium text-gray-900 uppercase">{pf.id}</td>
+                                                    <td className="px-3 py-3 text-[10px] text-gray-600 uppercase">{pf.fecha}</td>
+                                                    <td className="px-3 py-3 text-[10px] text-gray-600 uppercase">{pf.asesor}</td>
+                                                    <td className="px-3 py-3 text-[10px] text-gray-600 uppercase">{pf.registrado}</td>
+                                                    <td className="px-3 py-3 text-[10px] text-gray-600 uppercase font-bold text-[#0B3B8C]">{pf.almacen}</td>
+                                                    <td className="px-3 py-3 text-[10px] text-gray-900 font-bold uppercase">{pf.num}</td>
+                                                    <td className="px-3 py-3 text-[10px]">
+                                                        {pf.estado ? (
+                                                            <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-[10px] font-bold uppercase">
+                                                                {pf.estado}
+                                                            </span>
+                                                        ) : (
+                                                            <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full text-[10px] font-bold uppercase">
+                                                                Sin estado
+                                                            </span>
+                                                        )}
                                                     </td>
-                                                    <td className="px-3 py-4 text-center">
-                                                        <button
-                                                            className="bg-[#0B3B8C] text-white px-3 py-1 rounded-full text-[10px] font-bold hover:bg-[#002D5A] transition-colors uppercase shadow-sm"
-                                                            onClick={() => emitirProforma(pf.id)}
-                                                        >
-                                                            Emitir
-                                                        </button>
+                                                    <td className="px-3 py-3 text-[10px] text-gray-600">
+                                                        {pf.archivo_pdf ? (
+                                                            <button
+                                                                onClick={() => descargarProformaPDF(pf.archivo_pdf || null)}
+                                                                className="inline-flex items-center space-x-1 px-2.5 py-1 bg-gradient-to-br from-red-500 to-red-600 text-white rounded-lg text-[10px] font-bold hover:opacity-90 transition-all duration-200 shadow-sm"
+                                                            >
+                                                                <FileText className="w-3 h-3" />
+                                                                <span>PDF</span>
+                                                            </button>
+                                                        ) : (
+                                                            <span className="text-gray-400 text-[10px] italic">No disponible</span>
+                                                        )}
+                                                    </td>
+                                                    <td className="px-3 py-3 text-center text-[10px]">
+                                                        <div className="flex items-center justify-center gap-2">
+                                                            <button
+                                                                className="bg-green-600 text-white px-2 py-1 rounded-full text-[10px] font-bold hover:bg-green-700 transition-colors uppercase shadow-sm"
+                                                                onClick={() => verDetalleProforma(pf.id)}
+                                                                title="Ver detalle"
+                                                            >
+                                                                <Eye className="w-3 h-3 inline" />
+                                                            </button>
+                                                        </div>
                                                     </td>
                                                 </tr>
                                             ))
@@ -209,8 +236,136 @@ export default function ProformasPage() {
             </div>
             <NuevoProformaModal
                 isOpen={isModalOpen}
-                onClose={() => setIsModalOpen(false)}
+                onClose={() => {
+                    setIsModalOpen(false);
+                }}
             />
+
+            {/* Modal de Detalle de Proforma */}
+            {selectedProforma && (
+                <Modal
+                    isOpen={isDetailModalOpen}
+                    onClose={() => {
+                        setIsDetailModalOpen(false);
+                        setSelectedProforma(null);
+                    }}
+                    title={<><Receipt className="w-5 h-5" /> Detalle de Proforma</>}
+                    size="2xl"
+                >
+                    <div className="space-y-4">
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="text-xs font-semibold text-gray-600 uppercase mb-1 block">Número de Proforma</label>
+                                <input
+                                    type="text"
+                                    value={selectedProforma.proforma?.numero_proforma || ''}
+                                    readOnly
+                                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-bold text-gray-900"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-xs font-semibold text-gray-600 uppercase mb-1 block">Fecha de Registro</label>
+                                <input
+                                    type="text"
+                                    value={selectedProforma.proforma?.fecha_formateada || ''}
+                                    readOnly
+                                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-xs font-semibold text-gray-600 uppercase mb-1 block">Asesor</label>
+                                <input
+                                    type="text"
+                                    value={selectedProforma.proforma?.asesor || ''}
+                                    readOnly
+                                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-xs font-semibold text-gray-600 uppercase mb-1 block">Registrado por</label>
+                                <input
+                                    type="text"
+                                    value={selectedProforma.proforma?.registrado_por || ''}
+                                    readOnly
+                                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-xs font-semibold text-gray-600 uppercase mb-1 block">Almacén</label>
+                                <input
+                                    type="text"
+                                    value={selectedProforma.proforma?.almacen || ''}
+                                    readOnly
+                                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-bold text-[#0B3B8C] uppercase"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-xs font-semibold text-gray-600 uppercase mb-1 block">Estado</label><br />
+                                {selectedProforma.proforma?.estado ? (
+                                    <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-semibold uppercase inline-block">
+                                        {selectedProforma.proforma.estado}
+                                    </span>
+                                ) : (
+                                    <span className="text-gray-400 italic text-sm">Sin estado</span>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="border-t pt-4">
+                            <h6 className="font-bold text-gray-700 mb-3 text-sm uppercase">Productos ({selectedProforma.total_productos || 0})</h6>
+                            <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-xs">
+                                        <thead>
+                                            <tr className="border-b-[4px]" style={{ backgroundColor: '#002D5A', borderColor: '#F4B400' }}>
+                                                <th className="px-3 py-2.5 text-left text-[9px] font-bold uppercase tracking-wider text-white">Producto</th>
+                                                <th className="px-3 py-2.5 text-center text-[9px] font-bold uppercase tracking-wider text-white">Código</th>
+                                                <th className="px-3 py-2.5 text-center text-[9px] font-bold uppercase tracking-wider text-white">Cantidad</th>
+                                                <th className="px-3 py-2.5 text-center text-[9px] font-bold uppercase tracking-wider text-white">Unidad</th>
+                                                <th className="px-3 py-2.5 text-center text-[9px] font-bold uppercase tracking-wider text-white">Físico Antes</th>
+                                                <th className="px-3 py-2.5 text-center text-[9px] font-bold uppercase tracking-wider text-white">Físico Después</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-100">
+                                            {selectedProforma.detalle && selectedProforma.detalle.length > 0 ? (
+                                                selectedProforma.detalle.map((item: any, idx: number) => (
+                                                    <tr key={idx} className="hover:bg-gray-50">
+                                                        <td className="px-3 py-2 font-semibold">{item.producto}</td>
+                                                        <td className="px-3 py-2 text-center">{item.codigo}</td>
+                                                        <td className="px-3 py-2 text-center font-bold">{item.cantidad}</td>
+                                                        <td className="px-3 py-2 text-center">{item.unidad_medida}</td>
+                                                        <td className="px-3 py-2 text-center">{item.cantidad_fisico_antes || '-'}</td>
+                                                        <td className="px-3 py-2 text-center font-bold text-green-600">{item.cantidad_fisico_despues || '-'}</td>
+                                                    </tr>
+                                                ))
+                                            ) : (
+                                                <tr>
+                                                    <td colSpan={6} className="px-3 py-4 text-center text-gray-400 italic">No hay productos</td>
+                                                </tr>
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex gap-2 pt-4 border-t">
+                            <button
+                                className="flex-1 px-4 py-1.5 bg-[#002D5A] text-white rounded-full text-[10px] font-bold hover:bg-[#001F3D] transition-colors"
+                                onClick={() => actualizarEstadoProforma(selectedProforma.proforma?.id, 'PROFORMA INGRESADA')}
+                            >
+                                Marcar como Ingresada
+                            </button>
+                            <button
+                                className="flex-1 px-4 py-1.5 bg-green-600 text-white rounded-full text-[10px] font-bold hover:bg-green-700 transition-colors"
+                                onClick={() => actualizarEstadoProforma(selectedProforma.proforma?.id, 'TIENE COMPROBANTE')}
+                            >
+                                Marcar con Comprobante
+                            </button>
+                        </div>
+                    </div>
+                </Modal>
+            )}
         </>
     );
 }

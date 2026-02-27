@@ -130,3 +130,35 @@ div.rounded-full,
 .main-header button:has(svg.lucide-menu) {
   border-radius: 8px !important;
 }
+
+/* Animación para conteos recién agregados */
+@keyframes pulse-new {
+  0% {
+    box-shadow: 0 0 0 0 rgba(11, 59, 140, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(11, 59, 140, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(11, 59, 140, 0);
+  }
+}
+
+@keyframes spin-slow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin-slow {
+  animation: spin-slow 8s linear infinite;
+}
+
+.animate-pulse-new {
+  animation: pulse-new 0.8s ease-in-out 2;
+  border-left: 4px solid #0B3B8C !important;
+  background-color: rgba(11, 59, 140, 0.05) !important;
+}

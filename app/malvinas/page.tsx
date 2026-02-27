@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useInventory, fmt12 } from '@/context/InventoryContext';
 import { apiCall } from '@/lib/api';
-import { Store, Box, Columns, PlayCircle, FileText, Search, ShieldCheck, Loader2 } from 'lucide-react';
+import { Store, Box, Columns, PlayCircle, FileText, Search, ShieldCheck, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
 import IniciarConteoModal from '@/components/modals/IniciarConteoModal';
 import Modal from '@/components/Modal';
 import jsPDF from 'jspdf';
@@ -11,6 +11,28 @@ import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 
 const TIENDAS = ['TIENDA 3006', 'TIENDA 3006 B', 'TIENDA 3131', 'TIENDA 3133', 'TIENDA 412-A'];
+const TIENDAS_CAJAS = TIENDAS.filter(t => t !== 'TIENDA 3006 B');
+const TIENDAS_STAND = TIENDAS.filter(t => t !== 'TIENDA 3006');
+
+// Función helper para formatear fechas a hora de Perú
+const formatearFechaPeru = (fechaStr: string) => {
+    if (!fechaStr) return '-';
+    try {
+        // La fecha viene del backend ya en formato YYYY-MM-DD HH:MM:SS
+        // MySQL con time_zone = '-05:00' ya devuelve en hora de Perú
+        // Solo formatear a DD/MM/YYYY HH:MM:SS
+        const [datePart, timePart] = fechaStr.split(' ');
+        if (!datePart || !timePart) return fechaStr;
+
+        const [year, month, day] = datePart.split('-');
+        const [hour, minute, second] = timePart.split(':');
+
+        // Formatear directamente (ya viene en hora de Perú del backend)
+        return `${day}/${month}/${year} ${hour}:${minute}:${second || '00'}`;
+    } catch {
+        return fechaStr;
+    }
+};
 
 export default function MalvinasPage() {
     const { state, setState, updateSesionActual, showAlert, showConfirm } = useInventory();
@@ -25,6 +47,154 @@ export default function MalvinasPage() {
     const [isAvisoOpen, setIsAvisoOpen] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [activeSessionCounts, setActiveSessionCounts] = useState<any>(null); // Datos de conteos por tienda y tipo
+
+    // Modal de previsualización de Excel
+    const [showPreviewModal, setShowPreviewModal] = useState(false);
+    const [excelPreviewData, setExcelPreviewData] = useState<Array<{ codigo: string, cantidad: any, producto?: string }>>([]);
+    const [pendingExcelFile, setPendingExcelFile] = useState<File | null>(null);
+
+    // Función para guardar currentConteo en localStorage (incluyendo filas con cantidades)
+    const guardarCurrentConteo = useCallback((conteo: any) => {
+        if (conteo && typeof window !== 'undefined') {
+            // Guardar información básica + filas con sus cantidades para restauración completa
+            const datosAGuardar = {
+                conteo_id: conteo.conteo_id,
+                tipo: conteo.tipo,
+                numero: conteo.numero,
+                registrado: conteo.registrado,
+                tienda: conteo.tienda,
+                inicio: conteo.inicio,
+                // Guardar solo las filas con sus cantidades (para restauración rápida)
+                filas: conteo.filas ? conteo.filas.map((f: any) => ({
+                    codigo: f.codigo,
+                    cantidad_conteo: f.cantidad_conteo || '',
+                    unidad_medida: f.unidad_medida || 'UNIDAD',
+                    detalle_id: f.detalle_id || f.id
+                })) : []
+            };
+            localStorage.setItem('malvinas_current_conteo', JSON.stringify(datosAGuardar));
+        }
+    }, []);
+
+    // Función para limpiar currentConteo de localStorage
+    const limpiarCurrentConteo = useCallback(() => {
+        if (typeof window !== 'undefined') {
+            localStorage.removeItem('malvinas_current_conteo');
+        }
+    }, []);
+
+    // Restaurar currentConteo al cargar la página (solo si no hay uno activo)
+    useEffect(() => {
+        // Solo restaurar si no hay un currentConteo ya cargado
+        if (currentConteo) return;
+
+        const restaurarConteo = async () => {
+            if (!state.sesionActual.inventario_id || !state.sesionActual.activo) {
+                limpiarCurrentConteo();
+                return;
+            }
+
+            // Verificar si hay un conteo guardado en localStorage
+            const savedConteo = typeof window !== 'undefined'
+                ? localStorage.getItem('malvinas_current_conteo')
+                : null;
+
+            if (!savedConteo) return;
+
+            try {
+                const conteoInfo = JSON.parse(savedConteo);
+
+                // Verificar que el conteo guardado corresponde al inventario actual
+                if (conteoInfo.numero !== state.sesionActual.numero) {
+                    limpiarCurrentConteo();
+                    return;
+                }
+
+                // Verificar en el servidor si el conteo sigue en proceso
+                const response = await apiCall(`listar_conteos_malvinas&inventario_id=${state.sesionActual.inventario_id}`, 'GET');
+                if (response.success && response.tiendas) {
+                    const tipoConteoBusqueda = conteoInfo.tipo === 'cajas' ? 'por_cajas' : 'por_stand';
+                    const tiendaData = response.tiendas[conteoInfo.tienda];
+
+                    if (!tiendaData) {
+                        limpiarCurrentConteo();
+                        return;
+                    }
+
+                    const list = conteoInfo.tipo === 'cajas' ? tiendaData.conteos_por_cajas : tiendaData.conteos_por_stand;
+                    const conteoEnServidor = (list || []).find((c: any) =>
+                        c.id === conteoInfo.conteo_id &&
+                        c.estado === 'en_proceso'
+                    );
+
+                    if (conteoEnServidor) {
+                        // Cargar los detalles del conteo desde el servidor
+                        const detailRes = await apiCall(`obtener_detalle_conteo&conteo_id=${conteoInfo.conteo_id}`, 'GET');
+                        if (detailRes.success && detailRes.productos) {
+                            // Crear un mapa de las filas guardadas en localStorage (si existen)
+                            const filasGuardadasMap = new Map();
+                            if (conteoInfo.filas && Array.isArray(conteoInfo.filas)) {
+                                conteoInfo.filas.forEach((f: any) => {
+                                    if (f.codigo) {
+                                        filasGuardadasMap.set(String(f.codigo).trim().toUpperCase(), f);
+                                    }
+                                });
+                            }
+
+                            const filas = detailRes.productos.map((p: any) => {
+                                // El backend devuelve 'cantidad' que es la cantidad física guardada
+                                const cantidadGuardada = p.cantidad;
+
+                                // Buscar si hay datos guardados localmente para este producto
+                                const codigoNormalizado = String(p.codigo || '').trim().toUpperCase();
+                                const filaGuardada = filasGuardadasMap.get(codigoNormalizado);
+
+                                // Prioridad: 1) Datos guardados localmente (más recientes), 2) Datos del servidor, 3) Vacío
+                                let cantidadParaMostrar = '';
+                                if (filaGuardada && filaGuardada.cantidad_conteo && filaGuardada.cantidad_conteo !== '') {
+                                    cantidadParaMostrar = String(filaGuardada.cantidad_conteo);
+                                } else if (cantidadGuardada && Number(cantidadGuardada) > 0) {
+                                    cantidadParaMostrar = String(cantidadGuardada);
+                                }
+
+                                return {
+                                    ...p,
+                                    cantidad_conteo: cantidadParaMostrar,
+                                    unidad_medida: filaGuardada?.unidad_medida || p.unidad_medida || 'UNIDAD',
+                                    // Asegurar que tenemos el item correcto
+                                    item: p.item || p.item_producto
+                                };
+                            });
+
+                            const conteoRestaurado = {
+                                ...conteoInfo,
+                                filas: filas
+                            };
+                            setCurrentConteo(conteoRestaurado);
+                            guardarCurrentConteo(conteoRestaurado);
+                            setShowTable(true);
+                            const productosConCantidad = filas.filter((f: any) => f.cantidad_conteo !== '').length;
+                            console.log('✅ Conteo Malvinas restaurado desde servidor:', conteoInfo.conteo_id, 'en', conteoInfo.tienda, 'con', productosConCantidad, 'productos con cantidad');
+                        }
+                    } else {
+                        // El conteo ya no está en proceso, limpiar localStorage
+                        limpiarCurrentConteo();
+                    }
+                }
+            } catch (e) {
+                console.error('Error restaurando conteo Malvinas:', e);
+                limpiarCurrentConteo();
+            }
+        };
+
+        // Esperar un momento para que el estado se sincronice
+        const timer = setTimeout(() => {
+            restaurarConteo();
+        }, 1200);
+
+        return () => clearTimeout(timer);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [state.sesionActual.inventario_id, state.sesionActual.numero, state.sesionActual.activo]);
 
     const checkExistingCount = async (tipo: 'cajas' | 'stand', tienda: string) => {
         // 1. Verificar primero en el estado local (sincronizado por polling)
@@ -71,73 +241,137 @@ export default function MalvinasPage() {
         return false;
     };
 
-    const cargarSesionesAPI = React.useCallback(async () => {
+    const [pageMalvinas, setPageMalvinas] = useState(1);
+    const [paginationMalvinas, setPaginationMalvinas] = useState<any>(null);
+    const [loadingHistorial, setLoadingHistorial] = useState(false);
+    const [nuevosConteosIds, setNuevosConteosIds] = useState<Set<number>>(new Set());
+    const [conteosAnterioresIds, setConteosAnterioresIds] = useState<Set<number>>(new Set());
+
+    const cargarSesionesAPI = React.useCallback(async (page: number = 1) => {
+        setLoadingHistorial(true);
         try {
-            // Obtener todos los inventarios
-            const inventariosRes = await apiCall('listar_inventarios', 'GET');
-            if (!inventariosRes.success || !inventariosRes.inventarios) return;
+            // Usar el nuevo endpoint que trae todos los conteos finalizados con paginación
+            const response = await apiCall(`obtener_historial_conteos_malvinas&page=${page}&per_page=10`, 'GET');
+            if (response.success) {
+                const allSessions: any[] = [];
 
-            const allSessions: any[] = [];
+                // Combinar conteos por cajas y por stand
+                if (response.conteos_por_cajas) {
+                    response.conteos_por_cajas.forEach((c: any) => {
+                        allSessions.push({
+                            id: c.id,
+                            numero: c.inventario_numero || c.numero_inventario,
+                            registrado: c.registrado_por,
+                            inicio: c.fecha_hora_inicio,
+                            fin: c.fecha_hora_final,
+                            pdfUrl: c.archivo_pdf,
+                            tienda: c.nombre_tienda || '-',
+                            tipo: 'cajas',
+                            filas: []
+                        });
+                    });
+                }
 
-            // Para cada inventario, obtener sus conteos de Malvinas
-            for (const inv of inventariosRes.inventarios) {
-                try {
-                    const response = await apiCall(`listar_conteos_malvinas&inventario_id=${inv.id}`, 'GET');
-                    if (response.success && response.tiendas) {
-                        // Iterar por cada tienda
-                        Object.keys(response.tiendas).forEach(tienda => {
-                            const tiendaData = response.tiendas[tienda];
+                if (response.conteos_por_stand) {
+                    response.conteos_por_stand.forEach((c: any) => {
+                        allSessions.push({
+                            id: c.id,
+                            numero: c.inventario_numero || c.numero_inventario,
+                            registrado: c.registrado_por,
+                            inicio: c.fecha_hora_inicio,
+                            fin: c.fecha_hora_final,
+                            pdfUrl: c.archivo_pdf,
+                            tienda: c.nombre_tienda || '-',
+                            tipo: 'stand',
+                            filas: []
+                        });
+                    });
+                }
 
-                            // Conteos por cajas
-                            if (tiendaData.conteos_por_cajas) {
-                                tiendaData.conteos_por_cajas.forEach((c: any) => {
-                                    if (c.estado === 'finalizado') {
-                                        allSessions.push({
-                                            id: c.id,
-                                            numero: c.numero_inventario,
-                                            registrado: c.registrado_por,
-                                            inicio: c.fecha_hora_inicio,
-                                            fin: c.fecha_hora_final,
-                                            pdfUrl: c.archivo_pdf,
-                                            tienda: tienda,
-                                            tipo: 'cajas',
-                                            filas: []
-                                        });
-                                    }
-                                });
-                            }
+                setPaginationMalvinas(response.pagination);
 
-                            // Conteos por stand
-                            if (tiendaData.conteos_por_stand) {
-                                tiendaData.conteos_por_stand.forEach((c: any) => {
-                                    if (c.estado === 'finalizado') {
-                                        allSessions.push({
-                                            id: c.id,
-                                            numero: c.numero_inventario,
-                                            registrado: c.registrado_por,
-                                            inicio: c.fecha_hora_inicio,
-                                            fin: c.fecha_hora_final,
-                                            pdfUrl: c.archivo_pdf,
-                                            tienda: tienda,
-                                            tipo: 'stand',
-                                            filas: []
-                                        });
-                                    }
-                                });
+                // Si es la primera carga (set vacío), solo inicializar sin marcar como nuevos
+                const esPrimeraCarga = conteosAnterioresIds.size === 0;
+                let nuevosIds = new Set<number>();
+
+                if (esPrimeraCarga) {
+                    // Primera carga: solo inicializar el set sin animaciones
+                    const todosIds = new Set<number>();
+                    allSessions.forEach((s: any) => todosIds.add(s.id));
+                    setConteosAnterioresIds(todosIds);
+                } else {
+                    // Solo detectar y mostrar notificaciones de conteos nuevos cuando estás en la página 1
+                    // Si cambias de página, no mostrar notificaciones (solo actualizar el set)
+                    if (page === 1) {
+                        // Cargas posteriores en página 1: detectar conteos nuevos
+                        nuevosIds = new Set<number>();
+                        const nuevosConteos: any[] = [];
+
+                        allSessions.forEach((s: any) => {
+                            if (!conteosAnterioresIds.has(s.id)) {
+                                nuevosIds.add(s.id);
+                                nuevosConteos.push(s);
                             }
                         });
-                    }
-                } catch (e) {
-                    console.error(`Error cargando conteos para inv ${inv.id}:`, e);
-                }
-            }
 
-            setState((prev: any) => ({
-                ...prev,
-                sesiones: { ...prev.sesiones, malvinas: allSessions }
-            }));
+                        // Si hay conteos nuevos, agregarlos al set de nuevos conteos y mostrar notificación
+                        if (nuevosIds.size > 0) {
+                            setNuevosConteosIds(prev => {
+                                const nuevoSet = new Set(prev);
+                                nuevosIds.forEach(id => nuevoSet.add(id));
+                                return nuevoSet;
+                            });
+
+                            // Mostrar notificación profesional
+                            if (nuevosConteos.length === 1) {
+                                const conteo = nuevosConteos[0];
+                                showAlert(
+                                    'Nuevo Conteo Registrado',
+                                    `Se registró un conteo de tipo "${conteo.tipo === 'cajas' ? 'Cajas' : 'Stand'}" para el inventario "${conteo.numero}" por ${conteo.registrado} en ${conteo.tienda || 'Malvinas'}`,
+                                    'success'
+                                );
+                            } else {
+                                showAlert(
+                                    'Nuevos Conteos Registrados',
+                                    `Se registraron ${nuevosConteos.length} nuevos conteos`,
+                                    'success'
+                                );
+                            }
+
+                            // Remover la animación después de 3 segundos
+                            nuevosIds.forEach(id => {
+                                setTimeout(() => {
+                                    setNuevosConteosIds(prev => {
+                                        const nuevoSet = new Set(prev);
+                                        nuevoSet.delete(id);
+                                        return nuevoSet;
+                                    });
+                                }, 3000);
+                            });
+                        }
+                    }
+
+                    // Actualizar el set global de IDs vistos (acumulativo) - siempre, sin importar la página
+                    setConteosAnterioresIds(prev => {
+                        const nuevoSet = new Set(prev);
+                        allSessions.forEach((s: any) => nuevoSet.add(s.id));
+                        return nuevoSet;
+                    });
+                }
+
+                // El backend ya ordena por ID DESC (más reciente primero), mantener ese orden
+                // No reordenar en el frontend para preservar el orden del backend
+                const sesionesOrdenadas = allSessions;
+
+                setState((prev: any) => ({
+                    ...prev,
+                    sesiones: { ...prev.sesiones, malvinas: sesionesOrdenadas }
+                }));
+            }
         } catch (e) {
             console.error('Error al cargar historial:', e);
+        } finally {
+            setLoadingHistorial(false);
         }
     }, [setState]);
 
@@ -154,26 +388,29 @@ export default function MalvinasPage() {
     }, [state.sesionActual.inventario_id]);
 
     useEffect(() => {
-        cargarSesionesAPI();
+        cargarSesionesAPI(pageMalvinas);
         sincronizarConteosLocales();
         const interval = setInterval(() => {
-            cargarSesionesAPI();
+            cargarSesionesAPI(pageMalvinas);
             sincronizarConteosLocales();
         }, 3000);
         return () => clearInterval(interval);
-    }, [cargarSesionesAPI, sincronizarConteosLocales]);
+    }, [cargarSesionesAPI, sincronizarConteosLocales, pageMalvinas]);
 
     // Calcular estados para el encabezado
     const invNum = state.sesionActual.numero;
     const invNumNorm = (invNum || '').trim().toUpperCase();
     const sesionesMalvinas = state.sesiones.malvinas || [];
 
-    // Lógica Global de Malvinas: Se considera que una tienda está 'totalmente terminada' si tiene AMBOS conteos (Cajas y Stand)
+    // Lógica Global de Malvinas: Se considera que una tienda está 'totalmente terminada' si cumple sus requisitos específicos (Cajas y/o Stand)
     const tiendasTotalmenteTerminadas = TIENDAS.filter(t => {
-        const hasCajas = sesionesMalvinas.some((s: any) => (s.numero || '').trim().toUpperCase() === invNumNorm && s.tienda === t && s.tipo === 'cajas') ||
+        const needsCajas = TIENDAS_CAJAS.includes(t);
+        const needsStand = TIENDAS_STAND.includes(t);
+
+        const hasCajas = !needsCajas || sesionesMalvinas.some((s: any) => (s.numero || '').trim().toUpperCase() === invNumNorm && s.tienda === t && s.tipo === 'cajas') ||
             activeSessionCounts?.[t]?.conteos_por_cajas?.some((c: any) => c.estado === 'finalizado');
 
-        const hasStand = sesionesMalvinas.some((s: any) => (s.numero || '').trim().toUpperCase() === invNumNorm && s.tienda === t && s.tipo === 'stand') ||
+        const hasStand = !needsStand || sesionesMalvinas.some((s: any) => (s.numero || '').trim().toUpperCase() === invNumNorm && s.tienda === t && s.tipo === 'stand') ||
             activeSessionCounts?.[t]?.conteos_por_stand?.some((c: any) => c.estado === 'finalizado');
 
         return hasCajas && hasStand;
@@ -183,21 +420,21 @@ export default function MalvinasPage() {
     const todoCompletado = totalContadas === TIENDAS.length && TIENDAS.length > 0;
 
     // Conteo específico por tipo para los botones del header
-    const tiendasCajasHechas = TIENDAS.filter(t => {
+    const tiendasCajasHechas = TIENDAS_CAJAS.filter(t => {
         const enHistorial = sesionesMalvinas.some((s: any) => (s.numero || '').trim().toUpperCase() === invNumNorm && s.tienda === t && s.tipo === 'cajas');
         const enActivo = activeSessionCounts?.[t]?.conteos_por_cajas?.some((c: any) => c.estado === 'finalizado');
         return enHistorial || enActivo;
     });
 
-    const tiendasStandHechas = TIENDAS.filter(t => {
+    const tiendasStandHechas = TIENDAS_STAND.filter(t => {
         const enHistorial = sesionesMalvinas.some((s: any) => (s.numero || '').trim().toUpperCase() === invNumNorm && s.tienda === t && s.tipo === 'stand');
         const enActivo = activeSessionCounts?.[t]?.conteos_por_stand?.some((c: any) => c.estado === 'finalizado');
         return enHistorial || enActivo;
     });
 
     // Los botones se mostrarán verdes si todas sus tiendas respectivas están cubiertas
-    const cajasCompletadoGlobal = tiendasCajasHechas.length === TIENDAS.length && TIENDAS.length > 0;
-    const standCompletadoGlobal = tiendasStandHechas.length === TIENDAS.length && TIENDAS.length > 0;
+    const cajasCompletadoGlobal = tiendasCajasHechas.length === TIENDAS_CAJAS.length && TIENDAS_CAJAS.length > 0;
+    const standCompletadoGlobal = tiendasStandHechas.length === TIENDAS_STAND.length && TIENDAS_STAND.length > 0;
 
     // Indicadores de proceso: Solo mostrar cargando si hay algo en proceso QUE NO ESTÉ YA TERMINADO (POR TIPO)
     const cajasEnProcesoHeader = state.conteosEnProceso?.some((c: any) =>
@@ -319,11 +556,13 @@ export default function MalvinasPage() {
             }
         }
 
-        setCurrentConteo({
+        const nuevoConteo = {
             ...data,
             conteo_id: cid,
             filas: rowsWithIds
-        });
+        };
+        setCurrentConteo(nuevoConteo);
+        guardarCurrentConteo(nuevoConteo);
         setIsIniciarOpen(false);
         setIsAvisoOpen(true);
     };
@@ -367,7 +606,9 @@ export default function MalvinasPage() {
         const nuevasFilas = currentConteo.filas.map((f: any) =>
             f.codigo === codigo ? { ...f, cantidad_conteo: valor } : f
         );
-        setCurrentConteo({ ...currentConteo, filas: nuevasFilas });
+        const conteoActualizado = { ...currentConteo, filas: nuevasFilas };
+        setCurrentConteo(conteoActualizado);
+        guardarCurrentConteo(conteoActualizado);
     };
 
     const handleUpdateUnidad = (codigo: string, valor: string) => {
@@ -375,7 +616,9 @@ export default function MalvinasPage() {
         const nuevasFilas = currentConteo.filas.map((f: any) =>
             f.codigo === codigo ? { ...f, unidad_medida: valor } : f
         );
-        setCurrentConteo({ ...currentConteo, filas: nuevasFilas });
+        const conteoActualizado = { ...currentConteo, filas: nuevasFilas };
+        setCurrentConteo(conteoActualizado);
+        guardarCurrentConteo(conteoActualizado);
     };
 
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -391,46 +634,133 @@ export default function MalvinasPage() {
                 const wb = XLSX.read(bstr, { type: 'binary' });
                 const wsname = wb.SheetNames[0];
                 const ws = wb.Sheets[wsname];
-                const data = XLSX.utils.sheet_to_json(ws);
 
-                let updatedCount = 0;
-                const newFilas = currentConteo.filas.map((fila: any) => {
-                    // Buscar en el excel una fila que coincida con el código
-                    // Normalizamos las claves del excel a minúsculas para buscar 'codigo'
-                    const match = data.find((row: any) => {
-                        const keys = Object.keys(row);
-                        const codigoKey = keys.find(k => k.toLowerCase().includes('codigo') || k.toLowerCase().includes('código'));
-                        if (!codigoKey) return false;
-                        return String(row[codigoKey]).trim() === String(fila.codigo).trim();
-                    });
+                // Leer como array de arrays para acceder por posición de columna
+                const dataArray = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) as any[][];
 
-                    if (match) {
-                        const keys = Object.keys(match);
-                        const cantKey = keys.find(k => k.toLowerCase().includes('cantidad') || k.toLowerCase().includes('cant') || k.toLowerCase().includes('conteo'));
-                        if (cantKey) {
-                            updatedCount++;
-                            const val = (match as any)[cantKey];
-                            return { ...fila, cantidad_conteo: val !== undefined && val !== null ? String(val) : '' };
-                        }
-                    }
-                    return fila;
-                });
-
-                if (updatedCount > 0) {
-                    setCurrentConteo({ ...currentConteo, filas: newFilas });
-                    setShowTable(true);
-                    showAlert('Carga Exitosa', `Se actualizaron ${updatedCount} productos desde el archivo.`, 'success');
-                } else {
-                    showAlert('Aviso', 'No se encontraron coincidencias de CÓDIGO en el archivo. Verifique las columnas.', 'warning');
+                if (dataArray.length === 0) {
+                    showAlert('Error', 'El archivo Excel está vacío.', 'error');
+                    return;
                 }
+
+                // Encontrar índices de columnas: B=1 (código), N=13 (cantidad)
+                let codigoColIndex = 1;
+                let cantidadColIndex = 13;
+                let nombreColIndex = 0; // Columna A para nombre del producto
+
+                const headerRow = dataArray[0] || [];
+                let foundCodigoByPosition = false;
+                let foundCantidadByPosition = false;
+
+                // Verificar si la columna B tiene datos (código)
+                if (headerRow.length > codigoColIndex && headerRow[codigoColIndex]) {
+                    foundCodigoByPosition = true;
+                } else {
+                    const codigoHeader = headerRow.findIndex((h: any) => {
+                        const hStr = String(h || '').toLowerCase().trim();
+                        return hStr.includes('codigo') || hStr.includes('código') || hStr.includes('cod');
+                    });
+                    if (codigoHeader >= 0) {
+                        codigoColIndex = codigoHeader;
+                        foundCodigoByPosition = true;
+                    }
+                }
+
+                // Verificar si la columna N tiene datos (cantidad)
+                if (headerRow.length > cantidadColIndex && headerRow[cantidadColIndex]) {
+                    foundCantidadByPosition = true;
+                } else {
+                    const cantidadHeader = headerRow.findIndex((h: any) => {
+                        const hStr = String(h || '').toLowerCase().trim();
+                        return hStr.includes('cantidad') || hStr.includes('cant') || hStr.includes('conteo');
+                    });
+                    if (cantidadHeader >= 0) {
+                        cantidadColIndex = cantidadHeader;
+                        foundCantidadByPosition = true;
+                    }
+                }
+
+                if (!foundCodigoByPosition) {
+                    showAlert('Error', 'No se encontró la columna "Código" (B) en el archivo Excel.', 'error');
+                    return;
+                }
+
+                if (!foundCantidadByPosition) {
+                    showAlert('Error', 'No se encontró la columna "Cantidad" (N) en el archivo Excel.', 'error');
+                    return;
+                }
+
+                // Extraer datos para previsualización
+                const previewData: Array<{ codigo: string, cantidad: any, producto?: string }> = [];
+                const startRow = headerRow.some((h: any) => String(h || '').toLowerCase().includes('codigo') || String(h || '').toLowerCase().includes('cantidad')) ? 1 : 0;
+
+                for (let i = startRow; i < dataArray.length; i++) {
+                    const row = dataArray[i];
+                    if (!row || row.length === 0) continue;
+
+                    const codigo = String(row[codigoColIndex] || '').trim().toUpperCase();
+                    const cantidad = row[cantidadColIndex];
+                    const producto = row[nombreColIndex] ? String(row[nombreColIndex]).trim() : undefined;
+
+                    if (codigo && cantidad !== undefined && cantidad !== null && cantidad !== '') {
+                        previewData.push({ codigo, cantidad, producto });
+                    }
+                }
+
+                if (previewData.length === 0) {
+                    showAlert('Aviso', 'No se encontraron datos válidos en el archivo Excel.', 'warning');
+                    return;
+                }
+
+                // Mostrar modal de previsualización
+                setExcelPreviewData(previewData);
+                setPendingExcelFile(file);
+                setShowPreviewModal(true);
             } catch (error) {
                 console.error(error);
                 showAlert('Error', 'Hubo un problema al procesar el archivo Excel.', 'error');
             }
         };
         reader.readAsBinaryString(file);
-        // Limpiar input para permitir subir el mismo archivo de nuevo si es necesario
         if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+
+    const handleConfirmExcelUpload = () => {
+        if (!pendingExcelFile || !currentConteo) return;
+
+        // Crear mapa: código -> cantidad
+        const excelMap = new Map<string, any>();
+        excelPreviewData.forEach(item => {
+            excelMap.set(item.codigo, item.cantidad);
+        });
+
+        // Actualizar filas usando el mapa
+        let updatedCount = 0;
+        const newFilas = currentConteo.filas.map((fila: any) => {
+            const codigoNormalizado = String(fila.codigo || '').trim().toUpperCase();
+            const cantidadExcel = excelMap.get(codigoNormalizado);
+
+            if (cantidadExcel !== undefined && cantidadExcel !== null && cantidadExcel !== '') {
+                updatedCount++;
+                return { ...fila, cantidad_conteo: String(cantidadExcel) };
+            }
+            return fila;
+        });
+
+        if (updatedCount > 0) {
+            const conteoActualizado = { ...currentConteo, filas: newFilas };
+            setCurrentConteo(conteoActualizado);
+            guardarCurrentConteo(conteoActualizado);
+            setShowTable(true);
+            showAlert('Carga Exitosa', `Se actualizaron ${updatedCount} productos desde el archivo.`, 'success');
+        } else {
+            showAlert('Aviso', 'No se encontraron coincidencias de CÓDIGO en el archivo. Verifique las columnas.', 'warning');
+        }
+
+        // Cerrar modal y limpiar
+        setShowPreviewModal(false);
+        setExcelPreviewData([]);
+        setPendingExcelFile(null);
     };
 
     const handleRegistrarInventario = async () => {
@@ -512,6 +842,7 @@ export default function MalvinasPage() {
 
 
             setCurrentConteo(null);
+            limpiarCurrentConteo();
             setShowTable(false);
             // cargarSesionesAPI(); // Se comenta para mantener el update optimista
         } catch (e) {
@@ -523,30 +854,31 @@ export default function MalvinasPage() {
     };
 
     const getTiendaStatus = (tienda: string) => {
+        const needsCajas = TIENDAS_CAJAS.includes(tienda);
+        const needsStand = TIENDAS_STAND.includes(tienda);
+
         // 1. Verificar si AMBOS están completados (Cajas y Stand)
-        const hasCajas = (state.sesiones.malvinas || []).some((s: any) =>
+        const hasCajas = !needsCajas || (state.sesiones.malvinas || []).some((s: any) =>
             s.tienda === tienda && s.numero === state.sesionActual.numero && s.tipo === 'cajas' && s.fin
         ) || activeSessionCounts?.[tienda]?.conteos_por_cajas?.some((c: any) => c.estado === 'finalizado');
 
-        const hasStand = (state.sesiones.malvinas || []).some((s: any) =>
+        const hasStand = !needsStand || (state.sesiones.malvinas || []).some((s: any) =>
             s.tienda === tienda && s.numero === state.sesionActual.numero && s.tipo === 'stand' && s.fin
         ) || activeSessionCounts?.[tienda]?.conteos_por_stand?.some((c: any) => c.estado === 'finalizado');
 
         if (hasCajas && hasStand) return 'listo';
 
         // Si al menos uno está listo o en proceso, podríamos considerarlo "en_proceso" para la visualización global
-        if (hasCajas || hasStand) {
-            // Pero comprobamos si el que falta está realmente en proceso
-            return 'en_proceso';
-        }
-
-        // 3. Verificar si está en proceso por alguien más (vía conteosEnProceso)
         const enProceso = state.conteosEnProceso?.some((c: any) =>
             c.tienda_nombre === tienda &&
             c.almacen_nombre === 'Malvinas' &&
             c.estado === 'en_proceso'
         );
-        if (enProceso) return 'en_proceso';
+
+        // Si alguno está hecho o en proceso
+        if ((needsCajas && hasCajas) || (needsStand && hasStand) || enProceso) {
+            return 'en_proceso';
+        }
 
         return 'pendiente';
     };
@@ -560,10 +892,10 @@ export default function MalvinasPage() {
                 const response = await apiCall(`obtener_detalle_conteo&conteo_id=${sesion.id}`, 'GET');
                 if (response.success && response.productos) {
                     filas = response.productos.map((p: any) => ({
-                        item: p.item,
+                        item: p.item_producto || p.item,
                         producto: p.producto,
                         codigo: p.codigo,
-                        cantidad: p.cantidad_fisica,
+                        cantidad: p.cantidad || p.cantidad_fisica || 0,
                         unidad_medida: p.unidad_medida
                     }));
                 }
@@ -694,7 +1026,7 @@ export default function MalvinasPage() {
                                 disabled={cajasCompletadoGlobal}
                             >
                                 {cajasCompletadoGlobal ? <ShieldCheck className="w-4 h-4" /> : cajasEnProcesoHeader ? <Loader2 className="w-4 h-4 animate-spin" /> : <Box className="w-4 h-4" />}
-                                <span>{cajasCompletadoGlobal ? 'Cajas: Completado' : `Conteo por Cajas ${tiendasCajasHechas.length}/${TIENDAS.length}`}</span>
+                                <span>{cajasCompletadoGlobal ? 'Cajas: Completado' : `Conteo por Cajas ${tiendasCajasHechas.length}/${TIENDAS_CAJAS.length}`}</span>
                             </button>
                             <button
                                 onClick={() => {
@@ -711,7 +1043,7 @@ export default function MalvinasPage() {
                                 disabled={standCompletadoGlobal}
                             >
                                 {standCompletadoGlobal ? <ShieldCheck className="w-4 h-4" /> : standEnProcesoHeader ? <Loader2 className="w-4 h-4 animate-spin" /> : <Columns className="w-4 h-4" />}
-                                <span>{standCompletadoGlobal ? 'Stand: Completado' : `Conteo de Stand ${tiendasStandHechas.length}/${TIENDAS.length}`}</span>
+                                <span>{standCompletadoGlobal ? 'Stand: Completado' : `Conteo de Stand ${tiendasStandHechas.length}/${TIENDAS_STAND.length}`}</span>
                             </button>
                         </div>
                     </header>
@@ -805,9 +1137,9 @@ export default function MalvinasPage() {
                                         </div>
                                     </div>
                                     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-                                        <div className="max-h-[500px] overflow-y-auto">
+                                        <div className="overflow-x-auto">
                                             <table className="w-full text-left">
-                                                <thead className="sticky top-0 z-10">
+                                                <thead>
                                                     <tr className="border-b-[4px]" style={{ backgroundColor: '#002D5A', borderColor: '#F4B400' }}>
                                                         <th className="px-4 py-3 text-[10px] font-bold text-white uppercase tracking-wider">ITEM</th>
                                                         <th className="px-4 py-3 text-[10px] font-bold text-white uppercase tracking-wider">PRODUCTO</th>
@@ -889,7 +1221,7 @@ export default function MalvinasPage() {
                             <div className="relative">
                                 <input
                                     type="text"
-                                    className="bg-white border-2 border-gray-200 text-sm rounded-xl block w-64 pl-10 p-2.5 focus:border-[#0B3B8C] outline-none transition-all shadow-sm"
+                                    className="bg-white border-2 border-gray-200 text-sm rounded-xl block w-96 pl-10 p-2.5 focus:border-[#0B3B8C] outline-none transition-all shadow-sm"
                                     placeholder="Buscar..."
                                     value={filterText}
                                     onChange={(e) => setFilterText(e.target.value)}
@@ -898,7 +1230,7 @@ export default function MalvinasPage() {
                             </div>
                             <button
                                 onClick={handleGenerateReport}
-                                className="bg-white border-2 border-[#0B3B8C] text-[#0B3B8C] font-bold px-6 py-2 rounded-full btn-oval flex items-center gap-2 hover:bg-blue-50 transition-colors text-sm shadow-sm"
+                                className="bg-[#002D5A] text-white font-bold px-6 py-2.5 rounded-full flex items-center gap-2 hover:bg-[#001F3D] transition-colors text-sm shadow-sm"
                             >
                                 <FileText className="w-4 h-4" />
                                 <span>Generar reporte</span>
@@ -907,8 +1239,8 @@ export default function MalvinasPage() {
                     </div>
 
                     <div className="bg-white rounded-2xl shadow-lg border border-gray-200/60 overflow-hidden">
-                        <div className="overflow-x-auto">
-                            <table className="w-full">
+                        <div className="overflow-hidden">
+                            <table className="w-full table-auto">
                                 <thead>
                                     <tr className="border-b-[4px]" style={{ backgroundColor: '#002D5A', borderColor: '#F4B400' }}>
                                         <th className="px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider text-white whitespace-nowrap">ID</th>
@@ -930,44 +1262,33 @@ export default function MalvinasPage() {
                                         </tr>
                                     ) : (
                                         state.sesiones.malvinas.map((s: any, idx: number) => {
-                                            // Generar color único basado en el usuario
-                                            const getUserColor = (usuario: string) => {
-                                                const hash = usuario.split('').reduce((acc, char) => char.charCodeAt(0) + ((acc << 5) - acc), 0);
-                                                const hue = Math.abs(hash % 360);
-                                                return `hsl(${hue}, 70%, 95%)`; // Color de fondo pastel
-                                            };
-
-                                            const getUserTextColor = (usuario: string) => {
-                                                const hash = usuario.split('').reduce((acc, char) => char.charCodeAt(0) + ((acc << 5) - acc), 0);
-                                                const hue = Math.abs(hash % 360);
-                                                return `hsl(${hue}, 70%, 35%)`; // Color de texto oscuro
-                                            };
-
-                                            const bgColor = getUserColor(s.registrado || '');
-                                            const textColor = getUserTextColor(s.registrado || '');
+                                            const esNuevo = nuevosConteosIds.has(s.id);
 
                                             return (
                                                 <tr
                                                     key={s.id}
-                                                    className="transition-colors border-b border-gray-100 hover:opacity-90"
-                                                    style={{ backgroundColor: bgColor }}
+                                                    className={`border-b border-gray-100 hover:opacity-90 ${esNuevo ? 'animate-pulse-new' : ''
+                                                        }`}
+                                                    style={{
+                                                        backgroundColor: esNuevo ? `rgba(11, 59, 140, 0.08)` : 'white'
+                                                    }}
                                                 >
-                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] font-medium" style={{ color: textColor }}>{idx + 1}</td>
-                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px]" style={{ color: textColor }}>{s.inicio}</td>
-                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px]" style={{ color: textColor }}>{s.numero}</td>
-                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px]" style={{ color: textColor }}>{s.tienda}</td>
-                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] font-bold uppercase" style={{ color: textColor }}>{s.tipo}</td>
-                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] font-bold" style={{ color: textColor }}>{s.registrado}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] font-medium text-gray-700">{(pageMalvinas - 1) * 10 + idx + 1}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] text-gray-700">{formatearFechaPeru(s.inicio)}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] text-gray-700">{s.numero}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] text-gray-700">{s.tienda}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] font-bold uppercase text-gray-700">{s.tipo}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] font-bold text-gray-700">{s.registrado}</td>
                                                     <td className="px-4 py-3 whitespace-nowrap text-[10px]">
                                                         <button
                                                             onClick={() => handleDownloadPDF(s)}
-                                                            className="inline-flex items-center space-x-1 px-2.5 py-1 bg-white border border-red-500 text-red-500 rounded-lg text-[10px] font-bold hover:bg-red-50 transition-all duration-200 shadow-sm"
+                                                            className="inline-flex items-center space-x-1 px-2.5 py-1 bg-red-600 text-white rounded-full text-[10px] font-bold hover:bg-red-700 transition-all duration-200 shadow-sm"
                                                         >
                                                             <FileText className="w-3 h-3" />
                                                             <span>PDF</span>
                                                         </button>
                                                     </td>
-                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px]" style={{ color: textColor }}>{s.fin || '-'}</td>
+                                                    <td className="px-4 py-3 whitespace-nowrap text-[10px] text-gray-700">{s.fin ? formatearFechaPeru(s.fin) : '-'}</td>
                                                 </tr>
                                             );
                                         })
@@ -975,6 +1296,47 @@ export default function MalvinasPage() {
                                 </tbody>
                             </table>
                         </div>
+
+                        {/* Paginación */}
+                        {paginationMalvinas && (
+                            <div className="bg-gradient-to-r from-gray-50 to-gray-100 px-4 py-3 flex items-center justify-between border-t border-gray-200">
+                                <button
+                                    onClick={() => setPageMalvinas(1)}
+                                    disabled={pageMalvinas === 1 || loadingHistorial}
+                                    className="px-3 py-1.5 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 shadow-sm"
+                                    style={{ fontFamily: 'var(--font-poppins)' }}
+                                >
+                                    «
+                                </button>
+                                <button
+                                    onClick={() => setPageMalvinas(prev => Math.max(1, prev - 1))}
+                                    disabled={!paginationMalvinas.has_prev || loadingHistorial}
+                                    className="px-3 py-1.5 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 shadow-sm"
+                                    style={{ fontFamily: 'var(--font-poppins)' }}
+                                >
+                                    &lt;
+                                </button>
+                                <span className="text-xs text-gray-700 font-semibold" style={{ fontFamily: 'var(--font-poppins)' }}>
+                                    Página {pageMalvinas} de {paginationMalvinas.total_pages}
+                                </span>
+                                <button
+                                    onClick={() => setPageMalvinas(prev => prev + 1)}
+                                    disabled={!paginationMalvinas.has_next || loadingHistorial}
+                                    className="px-3 py-1.5 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 shadow-sm"
+                                    style={{ fontFamily: 'var(--font-poppins)' }}
+                                >
+                                    &gt;
+                                </button>
+                                <button
+                                    onClick={() => setPageMalvinas(paginationMalvinas.total_pages)}
+                                    disabled={pageMalvinas === paginationMalvinas.total_pages || loadingHistorial}
+                                    className="px-3 py-1.5 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 shadow-sm"
+                                    style={{ fontFamily: 'var(--font-poppins)' }}
+                                >
+                                    »
+                                </button>
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>
@@ -1007,6 +1369,71 @@ export default function MalvinasPage() {
                         <li>Ante cualquier duda, <span className="font-bold text-gray-800">deténgase</span> y consulte al responsable.</li>
                     </ul>
                     <p className="text-[11px] text-gray-500 italic">El incumplimiento del procedimiento puede generar observaciones o sanciones conforme a las políticas internas. Al continuar usted declara conocer y cumplir el procedimiento.</p>
+                </div>
+            </Modal>
+
+            {/* Modal de Previsualización de Excel */}
+            <Modal
+                isOpen={showPreviewModal}
+                onClose={() => {
+                    setShowPreviewModal(false);
+                    setExcelPreviewData([]);
+                    setPendingExcelFile(null);
+                }}
+                title={<><FileText className="w-5 h-5" /> Previsualización de Excel</>}
+                size="xl"
+                footer={
+                    <>
+                        <button
+                            className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-full font-bold transition-colors"
+                            onClick={() => {
+                                setShowPreviewModal(false);
+                                setExcelPreviewData([]);
+                                setPendingExcelFile(null);
+                            }}
+                        >
+                            Cancelar
+                        </button>
+                        <button
+                            className="px-4 py-2 bg-[#002D5A] text-white rounded-full font-bold hover:bg-[#001F3D] transition-colors"
+                            onClick={handleConfirmExcelUpload}
+                        >
+                            Confirmar y Cargar
+                        </button>
+                    </>
+                }
+            >
+                <div className="space-y-4">
+                    <div className="bg-blue-50 p-3 rounded-xl border border-blue-100">
+                        <p className="text-xs text-blue-700 font-medium m-0">
+                            Se encontraron <strong>{excelPreviewData.length}</strong> productos en el archivo Excel. Revise los datos antes de confirmar.
+                        </p>
+                    </div>
+
+                    <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+                        <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+                            <table className="w-full">
+                                <thead>
+                                    <tr className="border-b-[4px]" style={{ backgroundColor: '#002D5A', borderColor: '#F4B400' }}>
+                                        <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-white whitespace-nowrap">#</th>
+                                        <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-white whitespace-nowrap">Producto</th>
+                                        <th className="px-3 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-white whitespace-nowrap">Código</th>
+                                        <th className="px-3 py-3 text-center text-[10px] font-bold uppercase tracking-wider text-white whitespace-nowrap">Cantidad</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100">
+                                    {excelPreviewData.map((item, idx) => (
+                                        <tr key={idx} className="hover:bg-blue-50/50 transition-colors border-b border-gray-100">
+                                            <td className="px-3 py-4 text-xs text-gray-500">{idx + 1}</td>
+                                            <td className="px-3 py-4 text-xs font-semibold text-gray-900">{item.producto || '-'}</td>
+                                            <td className="px-3 py-4 text-xs text-gray-600 font-medium">{item.codigo}</td>
+                                            <td className="px-3 py-4 text-xs text-center font-bold text-gray-900">{item.cantidad}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
                 </div>
             </Modal>
         </div>

@@ -57,6 +57,8 @@ export interface Proforma {
     almacen: string;
     num: string;
     estado?: string;
+    archivo_pdf?: string | null;
+    total_productos?: number;
     filas?: any[];
 }
 
@@ -129,13 +131,13 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const [state, setState] = useState<AppState>(initialState);
     const [notification, setNotification] = useState<FeedbackState | null>(null);
 
-    const showAlert = (title: string, message: string, type: 'success' | 'warning' | 'error' = 'success') => {
+    const showAlert = useCallback((title: string, message: string, type: 'success' | 'warning' | 'error' = 'success') => {
         setNotification({ title, message, type });
-    };
+    }, []);
 
-    const showConfirm = (title: string, message: string, onConfirm: () => void) => {
+    const showConfirm = useCallback((title: string, message: string, onConfirm: () => void) => {
         setNotification({ title, message, type: 'confirm', onConfirm });
-    };
+    }, []);
 
     const hideFeedback = () => setNotification(null);
 
@@ -290,9 +292,14 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
                             }
                         };
                     } else {
+                        // Si el servidor dice que hay OTRO inventario activo, el local ya no debería estar "activo"
                         return {
                             ...prev,
-                            conteosEnProceso: newCEnP
+                            conteosEnProceso: newCEnP,
+                            sesionActual: {
+                                ...prev.sesionActual,
+                                activo: false // Desactivar si el numero no coincide con el del servidor
+                            }
                         };
                     }
                 });
@@ -366,15 +373,63 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     const loadProformas = useCallback(async () => {
         try {
-            const response = await apiCall('obtener_proformas', 'GET');
-            if (response.success && response.proformas) {
+            const response = await apiCall('listar_proformas', 'GET');
+            console.log('Respuesta de listar_proformas:', response);
+
+            // Si la respuesta es exitosa o si simplemente no hay proformas (lista vacía es válida)
+            if (response.success || (response.proformas && Array.isArray(response.proformas))) {
+                // Mapear los datos del backend al formato esperado
+                const proformas = response.proformas || [];
+                const proformasMapeadas = proformas.map((pf: any) => ({
+                    id: pf.id,
+                    fecha: pf.fecha_formateada || pf.fecha_hora_registro || '',
+                    asesor: pf.asesor || '',
+                    registrado: pf.registrado_por || '',
+                    almacen: pf.almacen || '',
+                    num: pf.numero_proforma || '',
+                    estado: pf.estado || '',
+                    archivo_pdf: pf.archivo_pdf || null,
+                    total_productos: pf.total_productos || 0
+                }));
+
+                if (proformasMapeadas.length > 0) {
+                    console.log('Proformas mapeadas:', proformasMapeadas);
+                } else {
+                    console.log('No hay proformas registradas para este inventario');
+                }
+
                 setState((prev: AppState) => ({
                     ...prev,
-                    proformas: response.proformas
+                    proformas: proformasMapeadas
+                }));
+            } else {
+                // Solo mostrar error si es un error real, no cuando simplemente no hay datos
+                const message: string = (response.message as string) || 'Error desconocido';
+                const messageLower = message.toLowerCase();
+                const isNormalCase = messageLower.includes('no se especificó inventario') ||
+                    messageLower.includes('no hay inventario activo') ||
+                    messageLower.includes('inventario activo');
+
+                if (!isNormalCase) {
+                    console.error('Error en listar_proformas:', message);
+                } else {
+                    // Es normal que no haya inventario activo, solo loguear sin error
+                    console.log('No hay inventario activo, lista de proformas vacía');
+                }
+
+                // Limpiar proformas si hay error o no hay inventario
+                setState((prev: AppState) => ({
+                    ...prev,
+                    proformas: []
                 }));
             }
         } catch (e) {
             console.error("Error loading proformas:", e);
+            // Limpiar proformas si hay error
+            setState((prev: AppState) => ({
+                ...prev,
+                proformas: []
+            }));
         }
     }, []);
 
@@ -410,14 +465,21 @@ export const useInventory = () => {
 
 // Helpers
 export const fmt12 = (d: Date = new Date()) => {
-    const pad = (n: number) => n.toString().padStart(2, '0');
-    const day = pad(d.getDate());
-    const month = pad(d.getMonth() + 1);
-    const year = d.getFullYear();
-    const h = pad(d.getHours());
-    const m = pad(d.getMinutes());
-    const s = pad(d.getSeconds());
-    return `${day}/${month}/${year} ${h}:${m}:${s}`;
+    // Obtener fecha/hora en zona horaria de Perú (America/Lima)
+    const peruTime = d.toLocaleString('en-US', {
+        timeZone: 'America/Lima',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+    });
+    // Formato: MM/DD/YYYY, HH:MM:SS -> convertir a DD/MM/YYYY HH:MM:SS
+    const [datePart, timePart] = peruTime.split(', ');
+    const [month, day, year] = datePart.split('/');
+    return `${day}/${month}/${year} ${timePart}`;
 };
 
 export const uid = () => Math.random().toString(36).slice(2, 10);
