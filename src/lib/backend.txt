@@ -6399,20 +6399,39 @@ def registrar_proforma(data):
                 producto_item = producto_catalogo['item'] if producto_catalogo else None
                 producto_nombre = producto_catalogo['producto'] if producto_catalogo else codigo
                 
-                # Calcular físico actual del producto según almacén (suma de todos los conteos finalizados)
-                cursor.execute("""
-                    SELECT COALESCE(SUM(dc.cantidad), 0) as total_fisico
-                    FROM detalle_conteo dc
-                    JOIN conteos c ON dc.conteo_id = c.id
-                    JOIN productos_inventario pi ON dc.item_producto = pi.item
-                    WHERE c.inventario_id = %s
-                      AND c.almacen_id = %s
-                      AND pi.codigo = %s
-                      AND c.estado = 'finalizado'
-                """, (data['inventario_id'], almacen_id, codigo))
+                # Calcular físico actual respetando ediciones manuales
+                tabla_comp_init = 'comparaciones_callao' if data['almacen'] == 'callao' else 'comparaciones_malvinas'
                 
-                fisico_row = cursor.fetchone()
-                fisico_actual = float(fisico_row['total_fisico'] if fisico_row else 0)
+                # Intentar obtener de la tabla de comparación primero para ver si hay edición manual
+                cursor.execute(f"SELECT id, cantidad_fisica FROM {tabla_comp_init} WHERE inventario_id = %s AND codigo = %s", (data['inventario_id'], codigo))
+                comp_row_init = cursor.fetchone()
+                
+                fisico_actual = 0.0
+                usa_manual_init = False
+                
+                if comp_row_init:
+                    # Verificar si este registro tiene una edición manual en el historial
+                    cursor.execute("SELECT id FROM ediciones_cantidad_fisica WHERE comparacion_id = %s AND almacen = %s LIMIT 1", (comp_row_init['id'], data['almacen']))
+                    if cursor.fetchone():
+                        # Si hay edición manual, el "físico actual" es el valor en la tabla de comparación
+                        fisico_actual = float(comp_row_init['cantidad_fisica'] if comp_row_init['cantidad_fisica'] is not None else 0)
+                        usa_manual_init = True
+                
+                if not usa_manual_init:
+                    # Si no hay edición manual, calcular sumando conteos finalizados (comportamiento original)
+                    cursor.execute("""
+                        SELECT COALESCE(SUM(dc.cantidad), 0) as total_fisico
+                        FROM detalle_conteo dc
+                        JOIN conteos c ON dc.conteo_id = c.id
+                        JOIN productos_inventario pi ON dc.item_producto = pi.item
+                        WHERE c.inventario_id = %s
+                          AND c.almacen_id = %s
+                          AND pi.codigo = %s
+                          AND c.estado = 'finalizado'
+                    """, (data['inventario_id'], almacen_id, codigo))
+                    
+                    fisico_row = cursor.fetchone()
+                    fisico_actual = float(fisico_row['total_fisico'] if fisico_row else 0)
                 fisico_nuevo = fisico_actual - cantidad
                 
                 # Insertar línea del detalle
@@ -6513,20 +6532,38 @@ def registrar_proforma(data):
                         if not codigo:
                             continue
                         
-                        # Calcular nuevo físico total desde detalle_conteo
-                        cursor_update.execute("""
-                            SELECT COALESCE(SUM(dc.cantidad), 0) as total_fisico
-                            FROM detalle_conteo dc
-                            JOIN conteos c ON dc.conteo_id = c.id
-                            JOIN productos_inventario pi ON dc.item_producto = pi.item
-                            WHERE c.inventario_id = %s
-                              AND c.almacen_id = %s
-                              AND pi.codigo = %s
-                              AND c.estado != 'anulado'
-                        """, (data['inventario_id'], almacen_id, codigo))
+                        # Obtener físico actual de la tabla para ver si hay edición manual
+                        cursor_update.execute(f"SELECT id, cantidad_fisica FROM {tabla_comparacion} WHERE inventario_id = %s AND codigo = %s", (data['inventario_id'], codigo))
+                        comp_row_upd = cursor_update.fetchone()
                         
-                        fisico_row = cursor_update.fetchone()
-                        nuevo_fisico = float(fisico_row['total_fisico'] if fisico_row else 0)
+                        nuevo_fisico = 0.0
+                        usa_manual_upd = False
+                        cant_reg = float(producto.get('cantidad', 0))
+                        
+                        if comp_row_upd:
+                            # Verificar si tiene edición manual
+                            cursor_update.execute("SELECT id FROM ediciones_cantidad_fisica WHERE comparacion_id = %s AND almacen = %s LIMIT 1", (comp_row_upd['id'], data['almacen']))
+                            if cursor_update.fetchone():
+                                # Si es manual, el nuevo físico es lo que había en la tabla menos lo que se acaba de proformar
+                                # Nota: comp_row_upd['cantidad_fisica'] todavía tiene el valor ANTES de esta proforma
+                                nuevo_fisico = float(comp_row_upd['cantidad_fisica'] or 0) - cant_reg
+                                usa_manual_upd = True
+                        
+                        if not usa_manual_upd:
+                            # Si no hay edición manual, recalcular desde conteos (que ya fueron actualizados)
+                            cursor_update.execute("""
+                                SELECT COALESCE(SUM(dc.cantidad), 0) as total_fisico
+                                FROM detalle_conteo dc
+                                JOIN conteos c ON dc.conteo_id = c.id
+                                JOIN productos_inventario pi ON dc.item_producto = pi.item
+                                WHERE c.inventario_id = %s
+                                  AND c.almacen_id = %s
+                                  AND pi.codigo = %s
+                                  AND c.estado != 'anulado'
+                            """, (data['inventario_id'], almacen_id, codigo))
+                            
+                            fisico_row_upd = cursor_update.fetchone()
+                            nuevo_fisico = float(fisico_row_upd['total_fisico'] if fisico_row_upd else 0)
                         
                         # Actualizar o insertar en comparaciones
                         cursor_update.execute(f"""
